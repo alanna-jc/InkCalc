@@ -213,6 +213,14 @@ class PaperFeatureExtractor:
             metadata=sample.metadata,
         )
 
+# Most important -> this takes the raw ink sample and normalizes the coordinates according to the paper's specifications. 
+# Paper: Fast Multi Language LSTM based Online Handwriting.pdf - found in ~/Research Papers and References/Model
+# It handles both known and unknown writing areas, applying appropriate scaling and 
+# shifting to ensure the features are consistent with the model's expectations.
+# We need normalization to ensure that not only the modle can learn effectively but also for 
+# edit functionality in the future. The input will be normalized but we can always reconstruct the absolute coordinates 
+# to change the ink and then re-apply the feature extraction to het the new modified features for the model. 
+
     def _normalize_coordinates(
         self, sample: InkSample
     ) -> Tuple[Tuple[InkStroke, ...], NormalizationParameters]:
