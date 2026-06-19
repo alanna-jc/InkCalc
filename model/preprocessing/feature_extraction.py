@@ -1,6 +1,13 @@
 """
 feature_extraction.py
 
+note about the importance of dt and resampling: Different touchscreens have different sampling rates
+and therefore the density of points in time can vary widely across samples. To understand if the user 
+is drawing a long stroke slowly or a short stroke quickly, we need to capture the timing information as a delta time
+from point to point. This allows the model to learn patterns in the timing of strokes and implements 
+equidistant resampling to ensure that the spatial distribution of points is consistent across samples. 
+
+
 Paper-congruent raw-point feature extraction for online handwriting.
 
 This module implements the raw-touch-point branch described in:
@@ -9,7 +16,7 @@ This module implements the raw-touch-point branch described in:
     "Fast Multi-language LSTM-based Online Handwriting Recognition",
     Section 2.1.1, arXiv:1902.10525.
 
-It intentionally does NOT implement the paper's Bézier-curve representation.
+It intentionally does NOT implement the paper's Bézier-curve representation as per alannas instruction.
 """
 
 from __future__ import annotations

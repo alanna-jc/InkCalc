@@ -257,7 +257,7 @@ and stores the result in `sample.label`.
 
 ## Responsibility
 
-`feature_extraction.py` converts a parsed `InkSample` into a model-ready variable-length sequence.
+`feature_extraction.py` converts a parsed `InkSample` into a model-ready variable-length sequence. It takes the clean absolute-coordinate data that the parser produced and runs it through four sequential stages: validation, time-shifting, coordinate normalization, spatial resampling, and delta encoding.
 
 ```python
 from feature_extraction import FeatureExtractionConfig, PaperFeatureExtractor
@@ -288,6 +288,58 @@ Columns:
 3: pen_state
 4: new_stroke
 ```
+
+---
+
+## 5.1 `FeatureExtractionConfig` — Tunable Parameters
+
+All behavior is controlled through a single frozen config object that is validated before any processing begins.
+
+### `spatial_step` (default: `0.05`)
+
+The equidistant arc-length interval used during spatial resampling, in normalized coordinate units. After normalization, the writing area height equals `1.0`, so a step of `0.05` means approximately 20 resampled intervals per unit of height. Smaller values produce longer sequences with finer detail; larger values produce shorter sequences.
+
+### `surrogate_area_scale` (default: `1.20`)
+
+When no writing-area bounding box is available in the InkML metadata, the code estimates one from the observed ink. This scale factor expands that observed vertical extent. A value of `1.20` means the surrogate area is 20% taller than the tallest observed ink, matching the paper's stated approach. Must be at least `1.0`.
+
+### `min_coordinate_scale` (default: `1e-6`)
+
+A floor value used in two places. First, it guards against dividing by a near-zero scale when the observed ink has almost no vertical extent (such as a single dot). Second, during resampling, it defines the minimum distance two consecutive points must be apart before they are treated as distinct — points closer than this are deduplicated before interpolation, preventing numerical instability.
+
+### `monotonic_time_tolerance` (default: `1e-9`)
+
+Timestamps must be globally non-decreasing. Floating-point arithmetic can occasionally produce a tiny negative delta-t even in correctly recorded data. This tolerance defines how large a negative delta-t is considered a rounding artifact (clamped to zero) versus a genuine recording error (raises an exception). The tolerance is in seconds.
+
+### `require_monotonic_time` (default: `True`)
+
+When `True`, the validator raises an error if any timestamp decreases beyond the tolerance. Set to `False` only if the dataset is known to use per-stroke-local clocks that reset to zero at each new trace — this is unusual and must be confirmed from dataset documentation rather than assumed.
+
+### `preserve_single_point_strokes` (default: `True`)
+
+Single-point strokes (a tap, a decimal point, a dot) have zero arc length and cannot be spatially resampled in the normal way. When `True`, they are preserved as-is. When `False`, encountering one raises an error. Keep this `True` for mathematical handwriting, which regularly contains dots, decimal points, and diacritical marks.
+
+### `pen_state_mode` (default: `"last_point_up"`)
+
+Controls how pen-up events are encoded. See section 10 for full detail.
+
+---
+
+## 5.2 Input Validation (`_validate_sample`)
+
+Before any transformation, the extractor checks two things:
+
+**Finite values.** Every x, y, and t coordinate across all strokes must be a normal floating-point number — not `NaN`, not `+Inf`, not `-Inf`. Non-finite values would silently propagate through normalization and resampling and corrupt every downstream delta.
+
+**Globally monotonic timestamps.** Timestamps must never decrease as you move forward through all strokes in written order. The check is global, not per-stroke — it treats the entire sample as one continuous timeline. A timestamp that goes backwards at a stroke boundary is a sign either that the device restarted its clock, or that the InkML was assembled from mis-ordered traces. The code raises a detailed error pointing to the exact flattened point index where the reversal occurs, rather than silently repairing it. Silent repair can introduce impossible negative `dt` values into the final features.
+
+---
+
+## 5.3 Time Shifting (`_shift_time_to_zero`)
+
+The first timestamp of the first stroke is subtracted from every point in the sample. After this step, the first point always has `t = 0`, and all other timestamps represent elapsed time from the pen-down start.
+
+This is necessary because the delta encoding only produces time differences — the absolute starting time from the device clock carries no useful information for the model and would otherwise appear as a large `dt` on the very first point.
 
 ---
 
@@ -390,21 +442,27 @@ New sample positions are:
 0.00, 0.05, 0.10, 0.15, ...
 ```
 
-until the stroke endpoint.
+until the stroke endpoint. The last target is always snapped to the exact total stroke length so the endpoint is always included.
+
+## Deduplication before interpolation
+
+Before interpolation, any two consecutive source points that are within `min_coordinate_scale` of each other spatially are collapsed to one. The collapsing rule is: replace the earlier point with the later one. This means the surviving representative of a run of near-coincident points is always the last one (which has the latest timestamp), ensuring `t` stays non-decreasing.
+
+This step is necessary because linear interpolation (`np.interp`) requires strictly increasing x-values. Near-zero-length segments produce near-duplicate cumulative distances, which would make `np.interp` produce undefined or wildly incorrect results.
 
 ## Interpolating time
 
-At every new spatial location, the code linearly interpolates `x`, `y`, and `t`. Spatial regularity is achieved without discarding timing information.
+At every new spatial location, the code linearly interpolates `x`, `y`, and `t` simultaneously. This means time is spread proportionally according to the spatial distance covered, not the original sample-point index. Spatial regularity is achieved without discarding timing information.
 
 ## Single-point strokes
 
-Single-point and nearly zero-length strokes are preserved because they may represent decimal points, multiplication dots, punctuation, or tiny marks.
+Single-point and nearly zero-length strokes are preserved because they may represent decimal points, multiplication dots, punctuation, or tiny marks. A zero-length stroke is reduced to a single representative point whose position comes from the first recorded point and whose timestamp comes from the last, preserving the correct elapsed time.
 
 ---
 
 # 9. Delta feature creation
 
-After resampling, strokes are flattened in original writing order.
+After resampling, strokes are flattened in original writing order into a single sequence of absolute `(x, y, t, pen_state, new_stroke)` rows. The spatial differences are then computed across the entire flattened sequence at once.
 
 ```text
 dx_i = x_i - x_(i-1)
@@ -412,7 +470,7 @@ dy_i = y_i - y_(i-1)
 dt_i = t_i - t_(i-1)
 ```
 
-For the first point:
+For the first point, all three deltas are set to zero:
 
 ```text
 dx_0 = 0
@@ -420,9 +478,15 @@ dy_0 = 0
 dt_0 = 0
 ```
 
+`pen_state` and `new_stroke` are copied directly from the absolute rows rather than differenced — they are already binary indicators, not quantities.
+
 ## Do not reset deltas at stroke boundaries
 
-The jump from one stroke to the next can encode useful layout information, such as movement from a base symbol to a superscript or from numerator to denominator. The stroke flags tell the model that the jump was not a continuous drawn line.
+The jump from one stroke to the next can encode useful layout information, such as movement from a base symbol to a superscript or from numerator to denominator. The stroke flags (`new_stroke`) tell the model that the jump was not a continuous drawn line, but the spatial and temporal displacement itself is part of the signal.
+
+## Tiny-negative `dt` correction
+
+After computing deltas, it is possible for a `dt` value to be a very small negative number — for example `-2e-11` — due to floating-point rounding during the time interpolation step that occurred inside resampling. These are not genuine time reversals. Any `dt` that is negative but within `monotonic_time_tolerance` is clamped to exactly zero. Any `dt` more negative than that threshold raises a `FeatureExtractionError`, because it indicates a real problem in the source data that should be fixed upstream rather than papered over.
 
 ---
 
@@ -456,19 +520,59 @@ Use one convention consistently for training, validation, test, and live input.
 
 ---
 
-# 11. Variable-length output
+# 11. Output: `FeatureSequence` and `NormalizationParameters`
 
-The extractor returns:
+The extractor returns a `FeatureSequence` object containing everything needed by a downstream model and everything needed to reconstruct the original ink.
 
 ```python
 FeatureSequence(
-    features=np.ndarray[T, 5],
-    sequence_length=T,
-    ...
+    features          = np.ndarray,  # shape [T, 5], dtype float32
+    sequence_length   = T,           # == features.shape[0]
+    label             = "x^2+1",     # from the InkML annotation, or None
+    sample_id         = "sample_0001",
+    normalized_strokes  = (...),     # after normalization, before resampling
+    resampled_strokes   = (...),     # after resampling, before delta encoding
+    normalization       = NormalizationParameters(...),
+    metadata            = {...},
 )
 ```
 
-A later batch collator should pad only to the longest sample in each batch and preserve original sequence lengths.
+A later batch collator should pad only to the longest sample in each batch and pass original sequence lengths to the model so it ignores padding.
+
+## `NormalizationParameters`
+
+```python
+NormalizationParameters(
+    x_origin              = 738.0,   # first recorded x in device pixels
+    y_area_min            = 80.0,    # bottom of writing area (or surrogate)
+    scale                 = 480.0,   # height used for both x and y scaling
+    used_known_writing_area = True,
+)
+```
+
+These four numbers record exactly what transform was applied. They are stored alongside the features because:
+
+1. **Invertibility.** The normalized coordinates can be converted back to device pixels at any time: `x_device = x_normalized * scale + x_origin` and `y_device = y_normalized * scale + y_area_min`. This is required for the planned ink-editing functionality, where a user modifies a stroke and the pipeline must re-extract features from the corrected absolute coordinates.
+
+2. **Consistency checking.** If you process training data and live input through the same code, comparing `used_known_writing_area` across splits lets you detect data-collection differences before they affect training.
+
+## Reconstructing absolute coordinates from features
+
+`PaperFeatureExtractor` exposes a static method that inverts the delta encoding:
+
+```python
+absolute = PaperFeatureExtractor.reconstruct_absolute_deltas(features)
+```
+
+`np.cumsum` on the `dx`, `dy`, `dt` columns recovers normalized absolute x, y, t. The result starts at `(0, initial_y, initial_t)` — `initial_y` defaults to `0.0` because x was shifted so the first point is at `x = 0`, but y's starting position in normalized space depends on where in the writing area the first point fell.
+
+To get back to device pixels:
+
+```python
+absolute_normalized = PaperFeatureExtractor.reconstruct_absolute_deltas(features)
+x_device = absolute_normalized[:, 0] * normalization.scale + normalization.x_origin
+y_device = absolute_normalized[:, 1] * normalization.scale + normalization.y_area_min
+```
 
 ---
 
