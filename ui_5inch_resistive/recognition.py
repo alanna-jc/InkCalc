@@ -73,108 +73,120 @@ def _get_session():
 # ── Preprocessing  (must match training exactly)
 # ---------------------------------------------------------------------------
 
+_SPATIAL_STEP   = 0.05   # matches feature_extraction.py FeatureExtractionConfig
+_MIN_COORD_SCALE = 1e-6  # floor for bounding-box ranges and deduplication
+
+
+def _resample_stroke(points: list[tuple]) -> list[tuple]:
+    """
+    Resample one normalized stroke to equidistant arc-length intervals.
+    Mirrors _resample_stroke in feature_extraction.py exactly.
+
+    points: list of (x, y, t) already in normalized [0,1] coordinates.
+    Returns a new list of (x, y, t) tuples at spatial_step spacing.
+    """
+    if len(points) == 1:
+        return points
+
+    values = np.array(points, dtype=np.float64)          # (M, 3)
+
+    segment_lengths = np.linalg.norm(np.diff(values[:, :2], axis=0), axis=1)
+    cumulative = np.concatenate([[0.0], np.cumsum(segment_lengths)])
+    total_length = float(cumulative[-1])
+
+    if total_length < _MIN_COORD_SCALE:
+        # Zero-length stroke: single representative point (first xy, last t)
+        return [(float(values[0, 0]), float(values[0, 1]), float(values[-1, 2]))]
+
+    # Deduplicate near-coincident points so np.interp gets strictly
+    # increasing x values.
+    keep = [0]
+    for i in range(1, len(cumulative)):
+        if cumulative[i] > cumulative[keep[-1]] + _MIN_COORD_SCALE:
+            keep.append(i)
+        else:
+            keep[-1] = i
+
+    cum_u = cumulative[keep]
+    val_u = values[keep]
+
+    targets = np.arange(0.0, total_length, _SPATIAL_STEP)
+    if targets.size == 0 or not np.isclose(targets[-1], total_length):
+        targets = np.append(targets, total_length)
+    else:
+        targets[-1] = total_length
+
+    x_r = np.interp(targets, cum_u, val_u[:, 0])
+    y_r = np.interp(targets, cum_u, val_u[:, 1])
+    t_r = np.interp(targets, cum_u, val_u[:, 2])
+
+    return list(zip(x_r.tolist(), y_r.tolist(), t_r.tolist()))
+
+
 def _preprocess(strokes: list[list[tuple]], max_points: int):
     """
     Strokes → (points_tensor, lengths_tensor) ready for ONNX inference.
 
-    strokes is draw_state.strokes: [ [(x, y, t), …], … ]
-    where x, y are screen pixel coords and t is time.time() epoch seconds.
+    strokes: draw_state.strokes — [ [(x, y, t), …], … ]
+    x, y are screen pixel coords; t is time.time() epoch seconds.
 
-    Feature layout per point — matches training repo inkml.py exactly:
-        [dx, dy, dt, pen_up]
-        dx / dy  : normalised spatial delta from previous point
-        dt       : normalised time delta from previous point
-        pen_up   : 1.0 on the last point of each stroke, else 0.0
+    Pipeline (matches feature_extraction.py exactly):
+        1. Normalize x and y independently to [0, 1] using bounding box.
+        2. Resample each stroke to equidistant arc-length intervals of 0.05.
+        3. Flatten strokes; tag last point of each stroke with pen_up = 1.
+        4. Compute dx, dy, dt deltas (first row = 0).
+        5. Pad or truncate to max_points.
 
-    Normalisation makes the model invariant to screen resolution, drawing
-    size, and drawing speed — matching what the training parser applied to
-    the raw MathWriting InkML files before any sample was fed to the model.
+    Output features per point: [dx, dy, dt, pen_up]
     """
-    # ── Gap interpolation ─────────────────────────────────────────────
-    # Insert linearly interpolated points wherever consecutive samples
-    # are further apart than INTERP_DIST_PX. This compensates for events
-    # dropped by the touchscreen digitizer during fast strokes, making
-    # the input distribution closer to the evenly-sampled MathWriting
-    # training data. x, y, and t are all interpolated linearly.
-    # Tune independently of the renderer's INTERP_DIST in ui.py.
-    INTERP_DIST_PX = 4
-
-    filled = []
-    for stroke in strokes:
-        if not stroke:
-            continue
-        filled_stroke = [stroke[0]]
-        for j in range(1, len(stroke)):
-            x0, y0, t0 = stroke[j - 1]
-            x1, y1, t1 = stroke[j]
-            dist = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
-            if dist > INTERP_DIST_PX:
-                steps = int(dist / INTERP_DIST_PX)
-                for s in range(1, steps):
-                    alpha = s / steps
-                    filled_stroke.append((
-                        x0 + (x1 - x0) * alpha,
-                        y0 + (y1 - y0) * alpha,
-                        t0 + (t1 - t0) * alpha,
-                    ))
-            filled_stroke.append(stroke[j])
-        filled.append(filled_stroke)
-    strokes = filled
-
-    # Flatten all strokes into rows, tagging the last point of each stroke
-    rows = []
-    for stroke in strokes:
-        for i, (x, y, t) in enumerate(stroke):
-            pen_up = 1.0 if i == len(stroke) - 1 else 0.0
-            rows.append([x, y, t, pen_up])
-
-    arr = np.array(rows, dtype=np.float32)   # (N, 4)
-    N   = len(arr)
+    strokes = [s for s in strokes if s]
 
     # ── Spatial normalisation ─────────────────────────────────────────────
-    # Scale x and y independently to [0, 1] based on the bounding box of
-    # this drawing. Makes the model invariant to position on screen and to
-    # how large or small the user writes.
-    x_min, x_max = arr[:, 0].min(), arr[:, 0].max()
-    y_min, y_max = arr[:, 1].min(), arr[:, 1].max()
-    x_range = max(float(x_max - x_min), 1.0)
-    y_range = max(float(y_max - y_min), 1.0)
-    arr[:, 0] = (arr[:, 0] - x_min) / x_range
-    arr[:, 1] = (arr[:, 1] - y_min) / y_range
+    # Compute bounding box across all strokes before resampling so the scale
+    # is consistent across the whole drawing.
+    all_x = [x for stroke in strokes for x, _, _ in stroke]
+    all_y = [y for stroke in strokes for _, y, _ in stroke]
+    x_min = min(all_x);  x_max = max(all_x)
+    y_min = min(all_y);  y_max = max(all_y)
+    x_range = max(x_max - x_min, _MIN_COORD_SCALE)
+    y_range = max(y_max - y_min, _MIN_COORD_SCALE)
 
-    # ── Spatial deltas ────────────────────────────────────────────────────
-    # Replace absolute normalised coords with the delta from the previous
-    # point. The model learns pen movement patterns, not positions.
-    # The first point has no predecessor so its delta is 0.
-    arr[1:, 0] = np.diff(arr[:, 0])
-    arr[1:, 1] = np.diff(arr[:, 1])
-    arr[0,  0] = 0.0
-    arr[0,  1] = 0.0
+    norm_strokes = [
+        [((x - x_min) / x_range, (y - y_min) / y_range, t) for x, y, t in stroke]
+        for stroke in strokes
+    ]
 
-    # ── Temporal normalisation ────────────────────────────────────────────
-    # Convert raw timestamps to deltas, then scale by total session duration
-    # so the model is invariant to whether the user drew quickly or slowly.
-    # Unit (epoch seconds vs ms) cancels out because we divide by t_total.
-    raw_t   = arr[:, 2].copy()
-    t_total = max(float(raw_t[-1] - raw_t[0]), 1.0)
-    dt      = np.empty(N, dtype=np.float32)
-    dt[0]   = 0.0
-    dt[1:]  = np.diff(raw_t) / t_total
-    arr[:, 2] = dt
+    # ── Equidistant spatial resampling ────────────────────────────────────
+    resampled = [_resample_stroke(stroke) for stroke in norm_strokes]
+
+    # ── Flatten with pen_up tag ───────────────────────────────────────────
+    rows = []
+    for stroke in resampled:
+        for i, (x, y, t) in enumerate(stroke):
+            pen_up = 1.0 if i == len(stroke) - 1 else 0.0
+            rows.append((x, y, t, pen_up))
+
+    abs_arr = np.array(rows, dtype=np.float64)   # (N, 4)
+    N = len(abs_arr)
+
+    # ── Delta encoding ────────────────────────────────────────────────────
+    features = np.zeros((N, 4), dtype=np.float32)
+    features[1:, 0] = np.diff(abs_arr[:, 0])   # dx
+    features[1:, 1] = np.diff(abs_arr[:, 1])   # dy
+    features[1:, 2] = np.diff(abs_arr[:, 2])   # dt  (absolute seconds)
+    features[:,  3] = abs_arr[:, 3]             # pen_up
 
     # ── Pad / truncate to max_points ──────────────────────────────────────
-    # The model expects a fixed-length tensor. Real data length is passed
-    # separately as input_lengths so the BiGRU ignores padding.
     if N > max_points:
         print(f'[recognition] Warning: {N} points > max_points '
               f'{max_points}, truncating.')
-        arr = arr[:max_points]
+        features = features[:max_points]
     elif N < max_points:
         pad = np.zeros((max_points - N, 4), dtype=np.float32)
-        arr = np.concatenate([arr, pad], axis=0)
+        features = np.concatenate([features, pad], axis=0)
 
     actual_len = min(N, max_points)
-    return arr[np.newaxis], np.array([actual_len], dtype=np.int64)
+    return features[np.newaxis], np.array([actual_len], dtype=np.int64)
 
 
 # ---------------------------------------------------------------------------

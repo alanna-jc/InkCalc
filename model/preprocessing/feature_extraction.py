@@ -48,7 +48,6 @@ class FeatureExtractionConfig:
     """Configuration for the paper-compatible raw-point pipeline."""
 
     spatial_step: float = 0.05
-    surrogate_area_scale: float = 1.20
     min_coordinate_scale: float = 1e-6
     monotonic_time_tolerance: float = 1e-9
     require_monotonic_time: bool = True
@@ -58,13 +57,6 @@ class FeatureExtractionConfig:
     def validate(self) -> None:
         if not math.isfinite(self.spatial_step) or self.spatial_step <= 0:
             raise FeatureExtractionError("spatial_step must be positive and finite.")
-        if (
-            not math.isfinite(self.surrogate_area_scale)
-            or self.surrogate_area_scale < 1.0
-        ):
-            raise FeatureExtractionError(
-                "surrogate_area_scale must be finite and at least 1.0."
-            )
         if self.min_coordinate_scale <= 0:
             raise FeatureExtractionError("min_coordinate_scale must be positive.")
         if self.monotonic_time_tolerance < 0:
@@ -81,10 +73,10 @@ class FeatureExtractionConfig:
 class NormalizationParameters:
     """Coordinate transform applied to one complete ink sample."""
 
-    x_origin: float
-    y_area_min: float
-    scale: float
-    used_known_writing_area: bool
+    x_min: float
+    x_range: float
+    y_min: float
+    y_range: float
 
 
 @dataclass(frozen=True)
@@ -105,13 +97,12 @@ class FeatureSequence:
         "delta_y",
         "delta_t",
         "pen_state",
-        "new_stroke",
     )
 
     def __post_init__(self) -> None:
-        if self.features.ndim != 2 or self.features.shape[1] != 5:
+        if self.features.ndim != 2 or self.features.shape[1] != 4:
             raise FeatureExtractionError(
-                f"features must have shape [T, 5], got {self.features.shape}."
+                f"features must have shape [T, 4], got {self.features.shape}."
             )
         if self.sequence_length != self.features.shape[0]:
             raise FeatureExtractionError(
@@ -122,17 +113,16 @@ class FeatureSequence:
 
 
 class PaperFeatureExtractor:
-    """Create [dx, dy, dt, p, n] features from an :class:`InkSample`.
+    """Create [dx, dy, dt, p] features from an :class:`InkSample`.
 
-    Paper-congruent behavior:
-    - x and y are scaled isometrically using writing-area height.
-    - x is shifted so the first point has x = 0.
-    - the writing-area y range maps to [0, 1].
-    - when the area is unknown, a 20%-expanded surrogate vertical area is used.
+    Normalization behavior:
+    - x is normalized independently to [0, 1] using observed bounding box.
+    - y is normalized independently to [0, 1] using observed bounding box.
     - strokes are spatially resampled at delta = 0.05 by default.
     - x, y, and t are linearly interpolated during spatial resampling.
     - deltas are computed across the full flattened sequence and are not reset
       at stroke boundaries.
+    - pen_state = 1.0 at the last point of each stroke (pen up), 0.0 elsewhere.
     """
 
     def __init__(self, config: Optional[FeatureExtractionConfig] = None) -> None:
@@ -153,7 +143,6 @@ class PaperFeatureExtractor:
         metadata: Dict[str, object] = {
             "feature_names": FeatureSequence.FEATURE_NAMES,
             "spatial_step": self.config.spatial_step,
-            "surrogate_area_scale": self.config.surrogate_area_scale,
             "pen_state_mode": self.config.pen_state_mode,
             "original_stroke_count": len(sample.strokes),
             "original_point_count": sample.point_count,
@@ -220,53 +209,28 @@ class PaperFeatureExtractor:
             metadata=sample.metadata,
         )
 
-# Most important -> this takes the raw ink sample and normalizes the coordinates according to the paper's specifications. 
-# Paper: Fast Multi Language LSTM based Online Handwriting.pdf - found in ~/Research Papers and References/Model
-# It handles both known and unknown writing areas, applying appropriate scaling and 
-# shifting to ensure the features are consistent with the model's expectations.
-# We need normalization to ensure that not only the modle can learn effectively but also for 
-# edit functionality in the future. The input will be normalized but we can always reconstruct the absolute coordinates 
-# to change the ink and then re-apply the feature extraction to het the new modified features for the model. 
-
     def _normalize_coordinates(
         self, sample: InkSample
     ) -> Tuple[Tuple[InkStroke, ...], NormalizationParameters]:
         all_points = [point for stroke in sample.strokes for point in stroke.points]
-        x_origin = all_points[0].x
 
-        if sample.writing_area is not None and sample.writing_area.height > 0:
-            y_area_min = sample.writing_area.min_y
-            scale = sample.writing_area.height
-            used_known_area = True
-        else:
-            observed_y = np.asarray([point.y for point in all_points], dtype=np.float64)
-            observed_min = float(np.min(observed_y))
-            observed_max = float(np.max(observed_y))
-            observed_height = observed_max - observed_min
+        xs = np.asarray([p.x for p in all_points], dtype=np.float64)
+        ys = np.asarray([p.y for p in all_points], dtype=np.float64)
 
-            if observed_height < self.config.min_coordinate_scale:
-                observed_x = np.asarray([point.x for point in all_points], dtype=np.float64)
-                observed_width = float(np.max(observed_x) - np.min(observed_x))
-                scale = max(observed_width, 1.0, self.config.min_coordinate_scale)
-                y_area_min = observed_min - 0.5 * scale
-            else:
-                scale = observed_height * self.config.surrogate_area_scale
-                total_padding = scale - observed_height
-                y_area_min = observed_min - 0.5 * total_padding
+        x_min = float(np.min(xs))
+        x_max = float(np.max(xs))
+        y_min = float(np.min(ys))
+        y_max = float(np.max(ys))
 
-            used_known_area = False
-
-        if not math.isfinite(scale) or scale < self.config.min_coordinate_scale:
-            raise FeatureExtractionError(
-                f"Invalid coordinate scale {scale} for sample {sample.sample_id!r}."
-            )
+        x_range = max(x_max - x_min, self.config.min_coordinate_scale)
+        y_range = max(y_max - y_min, self.config.min_coordinate_scale)
 
         normalized_strokes: List[InkStroke] = []
         for stroke in sample.strokes:
             normalized_points = tuple(
                 InkPoint(
-                    x=(point.x - x_origin) / scale,
-                    y=(point.y - y_area_min) / scale,
+                    x=(point.x - x_min) / x_range,
+                    y=(point.y - y_min) / y_range,
                     t=point.t,
                 )
                 for point in stroke.points
@@ -276,10 +240,10 @@ class PaperFeatureExtractor:
             )
 
         parameters = NormalizationParameters(
-            x_origin=float(x_origin),
-            y_area_min=float(y_area_min),
-            scale=float(scale),
-            used_known_writing_area=used_known_area,
+            x_min=float(x_min),
+            x_range=float(x_range),
+            y_min=float(y_min),
+            y_range=float(y_range),
         )
         return tuple(normalized_strokes), parameters
 
@@ -350,37 +314,34 @@ class PaperFeatureExtractor:
         return InkStroke(resampled_points, stroke_id=stroke.stroke_id)
 
     def _encode_delta_features(self, strokes: Sequence[InkStroke]) -> np.ndarray:
-        absolute_rows: List[Tuple[float, float, float, float, float]] = []
+        absolute_rows: List[Tuple[float, float, float, float]] = []
 
         for stroke in strokes:
             point_count = len(stroke.points)
             for point_index, point in enumerate(stroke.points):
-                new_stroke = 1.0 if point_index == 0 else 0.0
-
                 if self.config.pen_state_mode == "last_point_up":
-                    pen_state = 0.0 if point_index == point_count - 1 else 1.0
+                    pen_state = 1.0 if point_index == point_count - 1 else 0.0
                 else:
-                    pen_state = 1.0
+                    pen_state = 0.0
 
                 absolute_rows.append(
-                    (point.x, point.y, point.t, pen_state, new_stroke)
+                    (point.x, point.y, point.t, pen_state)
                 )
 
             if self.config.pen_state_mode == "explicit_up_event":
                 endpoint = stroke.points[-1]
                 absolute_rows.append(
-                    (endpoint.x, endpoint.y, endpoint.t, 0.0, 0.0)
+                    (endpoint.x, endpoint.y, endpoint.t, 1.0)
                 )
 
         if not absolute_rows:
             raise FeatureExtractionError("No points remain after resampling.")
 
         absolute = np.asarray(absolute_rows, dtype=np.float64)
-        features = np.zeros((absolute.shape[0], 5), dtype=np.float32)
+        features = np.zeros((absolute.shape[0], 4), dtype=np.float32)
 
         features[1:, 0:3] = np.diff(absolute[:, 0:3], axis=0).astype(np.float32)
         features[:, 3] = absolute[:, 3].astype(np.float32)
-        features[:, 4] = absolute[:, 4].astype(np.float32)
 
         tiny_negative = (
             (features[:, 2] < 0)
@@ -417,13 +378,12 @@ class PaperFeatureExtractor:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Extract paper-compatible [dx, dy, dt, p, n] features."
+        description="Extract paper-compatible [dx, dy, dt, p] features."
     )
     parser.add_argument("inkml", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--default-time-unit", default="s")
     parser.add_argument("--spatial-step", type=float, default=0.05)
-    parser.add_argument("--surrogate-area-scale", type=float, default=1.20)
     parser.add_argument(
         "--pen-state-mode",
         choices=("last_point_up", "explicit_up_event"),
@@ -441,7 +401,6 @@ def main() -> None:
     extractor = PaperFeatureExtractor(
         FeatureExtractionConfig(
             spatial_step=args.spatial_step,
-            surrogate_area_scale=args.surrogate_area_scale,
             pen_state_mode=args.pen_state_mode,
         )
     )
@@ -463,10 +422,10 @@ def main() -> None:
         "feature_shape": list(sequence.features.shape),
         "feature_names": list(sequence.FEATURE_NAMES),
         "normalization": {
-            "x_origin": sequence.normalization.x_origin,
-            "y_area_min": sequence.normalization.y_area_min,
-            "scale": sequence.normalization.scale,
-            "used_known_writing_area": sequence.normalization.used_known_writing_area,
+            "x_min": sequence.normalization.x_min,
+            "x_range": sequence.normalization.x_range,
+            "y_min": sequence.normalization.y_min,
+            "y_range": sequence.normalization.y_range,
         },
         "output": str(args.output.resolve()),
     }
