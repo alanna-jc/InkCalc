@@ -4,35 +4,7 @@ import torch
 from torch import nn
 import tensorflow as tf
 
-
-# AC TODO copilot suggest something about supporting device / dtype
-def positional_encoding(seq_length, depth):
-    """
-    This class implements the Positional Encoding formulas from "Attention is all you need" section 3.5.
-
-    Args:
-        seq_length: Length of sequence
-        depth: number of features for each point in sequence
-
-    Returns:
-        pe: A positional encoding matrix of the size (seq_length, depth)
-    """
-    
-    pe = np.zeros((seq_length, depth))
-
-    # every row is a position
-    # every column is a depth of dim
-    position = np.arange(seq_length)[:, np.newaxis]
-
-    div_term = np.exp(np.arange(0, depth, 2) * -(np.log(10000.0) / depth)) 
-
-    # python broadcasts the (5,1) * (1, depth/2) into pe
-    pe[:,0::2] = np.sin(position * div_term)
-    pe[:,1::2] = np.cos(position * div_term)
-
-    return pe
-
-
+# AC TODO MAKE IT PERI (ALSO DO I NEED A FINAL LAYER NORM BEFORE ENCODER OUTPUT? )
 class PositionWiseFFN(nn.Module):
     """
         A positionwise feedforward network that expands and then contracts the amount of params
@@ -89,9 +61,10 @@ class TransformerEncoderBlock(nn.Module):
     def __init__(self, num_heads = 8, ffn_num_hidden = 2048, embed_dim = 512, dropout = 0.15):
         super().__init__()
 
-        # AC TODO 
         if embed_dim % num_heads != 0:
-            print("no!")
+            raise ValueError(
+                f"embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads})."
+            )
 
         # AC TODO masking for padding
         self.self_attention = nn.MultiheadAttention(
@@ -109,10 +82,21 @@ class TransformerEncoderBlock(nn.Module):
     
         self.position_wise_ffn = PositionWiseFFN(ffn_num_hidden, embed_dim)
         
-    def forward(self, x):
+    def forward(self, x, key_padding_mask):
+        """
+        Args:
+            x: input of shape 
+            key_padding_mask: shape (batch_size, seq_length), Rows: sequence point, Columns: bool (False if not padding, True if padding)
 
+        Returns:
+            x: insert shape 
+        """
         norm = self.norm1(x)
-        attn_output, _ = self.self_attention(norm, norm, norm, need_weights = False) # attn_output is (N: batch size, L: seq_length , E: embed_dim) 
+        # AC TODO add key_padding_mask
+        attn_output, _ = self.self_attention(norm, norm, norm, 
+                                             key_padding_mask = key_padding_mask,
+                                             need_weights = False) 
+        # attn_output is (N: batch size, L: seq_length , E: embed_dim) 
         
         x = x + self.dropout1(attn_output)
 
@@ -126,7 +110,7 @@ class TransformerEncoderBlock(nn.Module):
 
 class TransformerEncoder(nn.Module):    
     """
-    Transformer Encoder. Repeats the Transformer Encoder Block.
+    Transformer Encoder. Repeats the Transformer Encoder Block num_layers times.
  
     Args:
         num_layers: Number of transformer blocks stacked. Default of 8 is motivated by "MathWriting: ..."
@@ -150,41 +134,43 @@ class TransformerEncoder(nn.Module):
             ) for _ in range(num_layers) # this repeats the input 11 times
         ])
     
-    def forward(self, x):
+    def forward(self, x, key_padding_mask):
 
         # ModuleList output is array like and can be treated as such, with each position being an instance of the transformer encoder block
         for block in self.blocks:
-            x = block(x)
+            x = block(x, key_padding_mask)
 
         return x
 
 
 class CTCTransformer(nn.Module):
     """
-    Decoder: We can view the decoder of a CTC model as a simple linear transformation followed by a softmax normalization. This layer should project all  
-        steps of the encoder output into the dimensionality of the output alphabet. Source: https://distill.pub/2017/ctc/
+    Wraps entire transformer and adds a linear layer
         
     Args:
         encoder: the transformer encoder 
         vocab_size: total number of output classes including one blank for CTC 
         embed_dim: hidden dim of model, default of 512 from "MathWriting: ..."
     """
-    def __init__(self, encoder, vocab_size, embed_dim = 512):
+    def __init__(self, vocab_size, embed_dim = 512):
         super().__init__()
 
         # AC TODO : any inputs needed here
-        self.encoder = encoder
+        self.encoder = TransformerEncoder()
 
         # AC this I BELIEVE is where you add in your tree aware stuff (next steps though, NOT NOW!)
         self.linear = nn.Linear(embed_dim, vocab_size)
 
     def forward(self, x):
         """
+        Args:
+            x: of shape ()
+
         Returns: 
-            logits: 
+            logits: of shape (batch, time, vocab size) 
+            AC TODO draw it out
         """
         x = self.encoder(x)
-        # AC TODO draw it out: logits output shape is (batch, time, vocab size) 
         logits = self.linear(x)
 
         return logits
