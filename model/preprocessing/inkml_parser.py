@@ -45,12 +45,10 @@ import json
 import math
 import re
 
-#Dont think we need this below.
-#  Python standard libraries should be sufficient for this parsing
-# try:
-#     from defusedxml import ElementTree as ET  # type: ignore
-# except ImportError:  # pragma: no cover
-#     from xml.etree import ElementTree as ET
+try:
+    from defusedxml import ElementTree as ET  # type: ignore
+except ImportError:
+    from xml.etree import ElementTree as ET
 
 
 _NUMBER_TOKEN_RE = re.compile(
@@ -459,7 +457,7 @@ class InkMLParser:
             ) from exc
 
     def _extract_label(self, root) -> Optional[str]:
-        preferred_types = ("truth", "label", "transcription", "groundtruth")
+        preferred_types = ("normalizedlabel", "truth", "label", "transcription", "groundtruth")
         candidates: Dict[str, str] = {}
         fallback: Optional[str] = None
 

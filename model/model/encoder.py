@@ -161,22 +161,17 @@ class CTCTransformer(nn.Module):
         # AC this I BELIEVE is where you add in your tree aware stuff (next steps though, NOT NOW!)
         self.linear = nn.Linear(embed_dim, vocab_size)
 
-    def forward(self, x):
+    def forward(self, x, key_padding_mask=None):
         """
         Args:
             x: of shape ()
-
+            key_padding_mask: boolean shape (batch, time)
         Returns: 
             logits: of shape (batch, time, vocab size) 
             AC TODO draw it out
         """
-        x = self.encoder(x)
+        ## Explicitly route the mask down to the encoder
+        x = self.encoder(x,key_padding_mask=key_padding_mask)
         logits = self.linear(x)
 
         return logits
-
-
-
-
-
-

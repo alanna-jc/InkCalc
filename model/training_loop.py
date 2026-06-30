@@ -1,20 +1,30 @@
-import os
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.nn as nn
 
-from blocks import CTCTransformer
+from model.encoder import CTCTransformer
+from pathlib import Path
+from vocab import build_vocab, save_vocab, load_vocab, BLANK_IDX
+from preprocessing.dataset import build_dataloader, collect_labels
 
-SEQ_LENGTH = 100
-DEPTH = 4
+
+# i dont think these get used ever? 
+#SEQ_LENGTH = 100
+#DEPTH = 4
 
 # how do we get vocab?
-NUM_LABELS = 3 
-BLANK_IDX = 0
-VOCAB_SIZE = NUM_LABELS + 1   # +1 for CTC blank
+#NUM_LABELS = 3 we get this in main now
+#BLANK_IDX = 0 defined in vocab.py now
+#VOCAB_SIZE = NUM_LABELS + 1   # we get this in main now
 
-LEARNING_RATE = 1e-4 # dummy number
+# Paths: these are dummy paths right now!!!!
+TRAIN_DIR     = Path('data/mathwriting-2024/train')
+VAL_DIR       = Path('data/mathwriting-2024/valid')
+VOCAB_PATH    = Path('vocab.json')
+MAX_POINTS    = 512
+BATCH_SIZE    = 256
+LEARNING_RATE = 1e-4 # MathWriting used 1e-3 i think?
 NUM_EPOCHS = 50 # dummy number
 
 
@@ -33,7 +43,11 @@ def train_one_batch(model, batch, optimizer, ctc_loss, device):
     input_lengths = batch["input_lengths"].to(device) # the true ones after padding !
     target_lengths = batch["target_lengths"].to(device) # the true ones after padding !
 
-    logits = model(inputs) # (B, T, C)
+    B, T_max, _ = inputs.shape
+    padding_mask = torch.arange(T_max, device=device)[None, :] >= input_lengths[:, None]
+    
+    # need to pass in key_padding_mask 
+    logits = model(inputs, key_padding_mask=padding_mask) # (B, T, C)
 
     # Convert logits to probabilities
     log_probs = F.log_softmax(logits, dim=-1) # (B, T, C)
@@ -53,37 +67,69 @@ def validate_one_epoch(model, val_loader, ctc_loss, device):
     total_loss = 0.0
     num_batches = 0
 
-    # AC TODO how do we want to do this
-    for batch in val_loader:
-        inputs = batch["inputs"].to(device)
-        targets = batch["targets"].to(device)
-        input_lengths = batch["input_lengths"].to(device) # the true ones after padding !
-        target_lengths = batch["target_lengths"].to(device) # the true ones after padding !
+    with torch.no_grad():
+    
+        for batch in val_loader:
+            if batch is None: # in case batch is bad
+                continue
+            inputs = batch["inputs"].to(device)
+            targets = batch["targets"].to(device)
+            input_lengths = batch["input_lengths"].to(device) # the true ones after padding !
+            target_lengths = batch["target_lengths"].to(device) # the true ones after padding !
 
-        # this is detailed in the 'train_one_batch()' function
-        logits = model(inputs)                     
-        log_probs = F.log_softmax(logits, dim=-1) 
-        log_probs = log_probs.transpose(0, 1)     
+            B, T_max, _ = inputs.shape
+            padding_mask = torch.arange(T_max, device=device)[None, :] >= input_lengths[:, None]
 
-        loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
-        total_loss += loss.item()
-        num_batches += 1
+            # this is detailed in the 'train_one_batch()' function
+            logits = model(inputs, key_padding_mask=padding_mask)                   
+            log_probs = F.log_softmax(logits, dim=-1) 
+            log_probs = log_probs.transpose(0, 1)     
+
+            loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
+            total_loss += loss.item()
+            num_batches += 1
 
     return total_loss / max(num_batches, 1)
 
 def main():
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+    # Build vocabulary 
+    if VOCAB_PATH.exists():
+        print('[main] Loading existing vocab …')
+        tok2idx, idx2tok, meta = load_vocab(VOCAB_PATH)
+    else:
+        print('[main] Building vocab from train split …')
+        labels = collect_labels(TRAIN_DIR, use_normalized=True)
+        tok2idx, idx2tok = build_vocab(labels)
+        meta = {
+            'max_points':  MAX_POINTS,
+            'blank_idx':   BLANK_IDX,
+            'vocab_size':  len(idx2tok),
+        }
+        save_vocab(idx2tok, meta, VOCAB_PATH)
+
+    VOCAB_SIZE = meta['vocab_size']
+    print(f'[main] Vocab size: {VOCAB_SIZE}')
+
+   
     # -------------------------------------------------------------------
     # load dataset 
     # create input to model
     # this involves parsing and positional embeddings
-    train_loader = None
-    val_loader = None
+    train_paths = sorted(TRAIN_DIR.glob('*.inkml'))
+    val_paths   = sorted(VAL_DIR.glob('*.inkml'))
+
+    train_loader = build_dataloader(
+        train_paths, tok2idx, batch_size=BATCH_SIZE, shuffle=True
+    )
+    val_loader = build_dataloader(
+        val_paths, tok2idx, batch_size=BATCH_SIZE, shuffle=False
+    )
     # -------------------------------------------------------------------
 
     # init of model and optimizer
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     model = CTCTransformer(vocab_size = VOCAB_SIZE)
     model = model.to(device)
 
@@ -103,6 +149,10 @@ def main():
         num_train_batches = 0
 
         for batch in train_loader:
+            
+            if batch is None:   # whole batch was bad samples
+                continue # skip
+
             # AC TODO add model.train() into v this function??
             batch_loss = train_one_batch(model, batch, optimizer, ctc_loss, device)
             total_train_loss += batch_loss
@@ -131,8 +181,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
