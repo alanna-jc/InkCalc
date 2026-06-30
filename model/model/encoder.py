@@ -158,7 +158,7 @@ class CTCTransformer(nn.Module):
 
         self.linear = nn.Linear(embed_dim, vocab_size)
 
-    def forward(self, x, key_padding_mask=None):
+    def forward(self, x, key_padding_mask):
         """
         Args:
             x: Tensor of shape (batch_size, seq_len, embed_dim)
