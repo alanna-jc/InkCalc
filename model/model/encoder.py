@@ -1,13 +1,9 @@
-import os
-import numpy as np
 import torch
 from torch import nn
-import tensorflow as tf
 
-# AC TODO MAKE IT PERI (ALSO DO I NEED A FINAL LAYER NORM BEFORE ENCODER OUTPUT? )
 class PositionWiseFFN(nn.Module):
     """
-        A positionwise feedforward network that expands and then contracts the amount of params
+        A positionwise feedforward network that expands and then contracts the amount of dims
         
         Activation function used is Swish, as mentioned in "MathWriting: A Dataset For Handwritten
         Mathematical Expression Recognition" section 4.2.
@@ -23,16 +19,9 @@ class PositionWiseFFN(nn.Module):
     def __init__(self, ffn_num_hidden = 2048, embed_dim = 512, dropout = 0.15):
         super().__init__()
 
-        # fc layer: expansion
         self.expansion = nn.Linear(embed_dim, ffn_num_hidden)
-        
-        # activation 
         self.activation = nn.SiLU()
-
-        # dropout
         self.dropout = nn.Dropout(dropout)
-
-        # fc layer: contraction
         self.contraction = nn.Linear(ffn_num_hidden, embed_dim)
         
     def forward(self, x):
@@ -45,7 +34,7 @@ class PositionWiseFFN(nn.Module):
 
 class TransformerEncoderBlock(nn.Module):
     """
-    Encoder block of transformer with Pre-LN (motivated by: "On Layer Normalization in the Transformer Architecture").
+    Encoder block of transformer with Peri-LN motivated by "Peri-LN: Revisiting Layer Normalization in the Transformer Architecture"
     Flow is: Layer Norm, Multi Head Attention, Residual Add, PW FFN, Residual Add
  
     Args:
@@ -66,7 +55,6 @@ class TransformerEncoderBlock(nn.Module):
                 f"embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads})."
             )
 
-        # AC TODO masking for padding
         self.self_attention = nn.MultiheadAttention(
             embed_dim = embed_dim,
             num_heads = num_heads,
@@ -79,14 +67,16 @@ class TransformerEncoderBlock(nn.Module):
 
         self.norm1 = nn.LayerNorm(embed_dim)
         self.norm2 = nn.LayerNorm(embed_dim)
+        self.norm3 = nn.LayerNorm(embed_dim)
+        self.norm4 = nn.LayerNorm(embed_dim)
     
-        self.position_wise_ffn = PositionWiseFFN(ffn_num_hidden, embed_dim)
+        self.position_wise_ffn = PositionWiseFFN(ffn_num_hidden, embed_dim, dropout)
         
     def forward(self, x, key_padding_mask):
         """
         Args:
             x: input of shape 
-            key_padding_mask: shape (batch_size, seq_length), Rows: sequence point, Columns: bool (False if not padding, True if padding)
+            key_padding_mask: shape (batch_size, seq_length), (contains bools: False if not padding, True if padding)
 
         Returns:
             x: insert shape 
@@ -98,12 +88,12 @@ class TransformerEncoderBlock(nn.Module):
                                              need_weights = False) 
         # attn_output is (N: batch size, L: seq_length , E: embed_dim) 
         
-        x = x + self.dropout1(attn_output)
+        x = x + self.norm2(self.dropout1(attn_output))
 
-        norm = self.norm2(x)
+        norm = self.norm3(x)
         ffn_output = self.position_wise_ffn(norm)
 
-        x = x + self.dropout2(ffn_output)
+        x = x + self.norm4(self.dropout2(ffn_output))
 
         return x   
 
@@ -131,14 +121,18 @@ class TransformerEncoder(nn.Module):
                 ffn_num_hidden=ffn_num_hidden,
                 embed_dim=embed_dim,
                 dropout=dropout
-            ) for _ in range(num_layers) # this repeats the input 11 times
+            ) for _ in range(num_layers) # this repeats the input 'num_layers' times
         ])
+
+        self.final_norm = nn.LayerNorm(embed_dim)
     
     def forward(self, x, key_padding_mask):
 
         # ModuleList output is array like and can be treated as such, with each position being an instance of the transformer encoder block
         for block in self.blocks:
             x = block(x, key_padding_mask)
+
+        x = self.final_norm(x)
 
         return x
 
@@ -152,25 +146,28 @@ class CTCTransformer(nn.Module):
         vocab_size: total number of output classes including one blank for CTC 
         embed_dim: hidden dim of model, default of 512 from "MathWriting: ..."
     """
-    def __init__(self, vocab_size, embed_dim = 512):
+    def __init__(self, vocab_size, num_layers = 11, num_heads = 8, ffn_num_hidden = 2048, embed_dim = 512, dropout = 0.15):
         super().__init__()
 
         # AC TODO : any inputs needed here
-        self.encoder = TransformerEncoder()
+        self.encoder = TransformerEncoder(num_layers = num_layers, 
+                                          num_heads = num_heads, 
+                                          ffn_num_hidden = ffn_num_hidden, 
+                                          embed_dim = embed_dim, 
+                                          dropout = dropout)
 
-        # AC this I BELIEVE is where you add in your tree aware stuff (next steps though, NOT NOW!)
         self.linear = nn.Linear(embed_dim, vocab_size)
 
-    def forward(self, x):
+    def forward(self, x, key_padding_mask):
         """
         Args:
-            x: of shape ()
+            x: Tensor of shape (batch_size, seq_len, embed_dim)
+            key_padding_mask: Bool tensor of shape (batch_size, seq_len)
 
         Returns: 
-            logits: of shape (batch, time, vocab size) 
-            AC TODO draw it out
+            logits: of shape (batch, seq_len, vocab size) 
         """
-        x = self.encoder(x)
+        x = self.encoder(x, key_padding_mask)
         logits = self.linear(x)
 
         return logits
