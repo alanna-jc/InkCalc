@@ -41,8 +41,15 @@ def main():
     # Fake input
     # x shape: (batch_size, seq_len, embed_dim)
     # -------------------------
-    x = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    #x = torch.randn(batch_size, seq_len, embed_dim, device=device)
+    input_dim = 4
 
+    x = torch.randn(
+    batch_size,
+    seq_len,
+    input_dim,
+    device=device,
+    )
     # -------------------------
     # Fake padding mask
     # shape: (batch_size, seq_len)
