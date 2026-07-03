@@ -42,12 +42,10 @@ def train_one_batch(model, batch, optimizer, ctc_loss, device):
     targets = batch["targets"].to(device)
     input_lengths = batch["input_lengths"].to(device) # the true ones after padding !
     target_lengths = batch["target_lengths"].to(device) # the true ones after padding !
-
-    B, T_max, _ = inputs.shape
-    padding_mask = torch.arange(T_max, device=device)[None, :] >= input_lengths[:, None]
+    key_padding_mask = batch["key_padding_mask"].to(device)
     
     # need to pass in key_padding_mask 
-    logits = model(inputs, key_padding_mask=padding_mask) # (B, T, C)
+    logits = model(inputs, key_padding_mask=key_padding_mask) # (B, T, C)
 
     # Convert logits to probabilities
     log_probs = F.log_softmax(logits, dim=-1) # (B, T, C)
@@ -76,12 +74,10 @@ def validate_one_epoch(model, val_loader, ctc_loss, device):
             targets = batch["targets"].to(device)
             input_lengths = batch["input_lengths"].to(device) # the true ones after padding !
             target_lengths = batch["target_lengths"].to(device) # the true ones after padding !
-
-            B, T_max, _ = inputs.shape
-            padding_mask = torch.arange(T_max, device=device)[None, :] >= input_lengths[:, None]
+            key_padding_mask = batch["key_padding_mask"].to(device)
 
             # this is detailed in the 'train_one_batch()' function
-            logits = model(inputs, key_padding_mask=padding_mask)                   
+            logits = model(inputs, key_padding_mask=key_padding_mask)                   
             log_probs = F.log_softmax(logits, dim=-1) 
             log_probs = log_probs.transpose(0, 1)     
 

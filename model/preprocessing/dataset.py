@@ -1,6 +1,10 @@
 """
 dataset.py  —  PyTorch Dataset and DataLoader for MathWriting InkML files.
 
+This file prepares batches, truncates samples to 512 and pads up the length of
+the longest sequence in the batch. It also collects labels for the targets.
+Padding mask computed here too.
+
 MathWritingDataset(inkml_paths, tok2idx, ...)   map-style Dataset
 build_dataloader(inkml_paths, tok2idx, ...)     convenience wrapper
 collect_labels(inkml_dir, use_normalized)       gather labels for vocab building
@@ -10,7 +14,7 @@ Batch dict produced by the collate function (matches training_loop.py):
     batch["targets"]        int64    (sum_T_target,)       concatenated label indices
     batch["input_lengths"]  int64    (B,)                  true T per sample (pre-pad)
     batch["target_lengths"] int64    (B,)                  true label length per sample
-
+    batch["key_padding_mask"]  bool   (B, T_max)          key padding mask
 Why targets is 1-D (concatenated rather than 2-D padded):
     nn.CTCLoss accepts either shape. The 1-D form avoids any ambiguity about
     what the padding value should be, since CTC loss only reads up to
@@ -192,11 +196,14 @@ def _collate_fn(batch: list) -> Optional[dict]:
         dtype=torch.long,
     )   # shape: (sum of all target_lengths,)
 
+    key_padding_mask = torch.arange(T_max)[None, :] >= input_lengths[:, None]
+
     return {
         'inputs':         inputs,           # float32 (B, T_max, 4)
         'targets':        targets,          # int64   (sum_T_target,)
         'input_lengths':  input_lengths,    # int64   (B,)
         'target_lengths': target_lengths,   # int64   (B,)
+        'key_padding_mask': key_padding_mask,  # bool (B, T_max)
     }
 
 def build_dataloader(
