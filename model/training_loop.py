@@ -6,7 +6,7 @@ import torch.nn as nn
 from model.encoder import CTCTransformer
 from pathlib import Path
 from vocab import build_vocab, save_vocab, load_vocab, BLANK_IDX
-from preprocessing.dataset import build_dataloader, collect_labels
+from preprocessing.dataset import build_dataloader, collect_labels, MAX_POINTS
 
 
 # i dont think these get used ever? 
@@ -22,7 +22,6 @@ from preprocessing.dataset import build_dataloader, collect_labels
 TRAIN_DIR     = Path('data/mathwriting-2024/train')
 VAL_DIR       = Path('data/mathwriting-2024/valid')
 VOCAB_PATH    = Path('vocab.json')
-MAX_POINTS    = 512
 BATCH_SIZE    = 256
 LEARNING_RATE = 1e-4 # MathWriting used 1e-3 i think?
 NUM_EPOCHS = 50 # dummy number

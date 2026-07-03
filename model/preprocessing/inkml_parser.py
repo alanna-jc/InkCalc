@@ -17,7 +17,7 @@ converts an inkml file into
 
     it does not perform model feature extraction INTENTIONALLY. That is 
     handled in the feature_extraction.py module.
-    coordinate normalization, spatial resampling, and creation of [dx, dy, dt, p, n] is done in
+    coordinate normalization, spatial resampling, and creation of [dx, dy, dt, p] is done in
     feature extraction not here
 
 
