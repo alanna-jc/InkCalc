@@ -167,14 +167,14 @@ class CTCTransformer(nn.Module):
     def forward(self, x, key_padding_mask):
         """
         Args:
-            x: Tensor of shape (batch_size, seq_len, embed_dim)
+            x: Tensor of shape (batch_size, seq_len, 4)
             key_padding_mask: Bool tensor of shape (batch_size, seq_len)
 
         Returns: 
             logits: of shape (batch, seq_len, vocab size) 
         """
 
-        x =self.input_projection(x)  #(B,T,4) -> (B,T,embed_dim)
+        x =self.input_projection(x)  #(B,T,4) -> (B,T,embed_dim=512) 
         x = x + self.pe[:x.size(1)]
 
         ## Explicitly route the mask down to the encoder
