@@ -1,3 +1,5 @@
+from model.preprocessing.dataset import MAX_POINTS
+from model.positional_encoding import positional_encoding
 import torch
 from torch import nn
 
@@ -149,6 +151,10 @@ class CTCTransformer(nn.Module):
     def __init__(self, vocab_size, num_layers = 11, num_heads = 8, ffn_num_hidden = 2048, embed_dim = 512, dropout = 0.15):
         super().__init__()
 
+        self.input_projection = nn.Linear(4, embed_dim)  # input_dim is 4
+        pe = positional_encoding(MAX_POINTS, depth=embed_dim)  
+        self.register_buffer('pe', pe)  # Register as buffer to avoid being treated as a parameter
+        
         # AC TODO : any inputs needed here
         self.encoder = TransformerEncoder(num_layers = num_layers, 
                                           num_heads = num_heads, 
@@ -167,6 +173,10 @@ class CTCTransformer(nn.Module):
         Returns: 
             logits: of shape (batch, seq_len, vocab size) 
         """
+
+        x =self.input_projection(x)  #(B,T,4) -> (B,T,embed_dim)
+        x = x + self.pe[:x.size(1)]
+
         ## Explicitly route the mask down to the encoder
         x = self.encoder(x,key_padding_mask=key_padding_mask)
         logits = self.linear(x)
