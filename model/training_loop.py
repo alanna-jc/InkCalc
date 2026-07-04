@@ -1,5 +1,7 @@
 import math
-from sched import scheduler
+#from sched import scheduler
+import optuna
+import os
 
 import torch
 import torch.nn.functional as F
@@ -13,19 +15,12 @@ from preprocessing.dataset import build_dataloader, collect_labels, MAX_POINTS
 from postprocessing.ctc_decode import greedy_ctc_decode, edit_distance
 
 
-# i dont think these get used ever? 
-#SEQ_LENGTH = 100
-#DEPTH = 4
-
-# how do we get vocab?
-#NUM_LABELS = 3 we get this in main now
-#BLANK_IDX = 0 defined in vocab.py now
-#VOCAB_SIZE = NUM_LABELS + 1   # we get this in main now
-
 # Paths: these are dummy paths right now!!!!
 TRAIN_DIR     = Path('data/mathwriting-2024/train')
 VAL_DIR       = Path('data/mathwriting-2024/valid')
 VOCAB_PATH    = Path('vocab.json')
+CHECKPOINT_PATH = "checkpoint.pt"
+
 BATCH_SIZE    = 256
 LEARNING_RATE = 1e-3 # MathWriting used 1e-3 i think?
 WARMUP_STEPS  = 4000   # batches spent ramping 0 -> peak ("Attention is all you need" used 4000)
@@ -42,7 +37,7 @@ FFN_NUM_HIDDEN = 2048   # "Attention is all you need"
 DROPOUT        = 0.15   # MathWriting section 4.2
 
 
-def train_one_batch(model, batch, optimizer, ctc_loss, device):
+def train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device):
     """
     batch should contain: AC TODO 
         inputs:          
@@ -122,7 +117,40 @@ def validate_one_epoch(model, val_loader, ctc_loss, device):
     cer = total_edits / max(total_target_tokens, 1)
     return avg_loss, cer
 
-def main():
+
+def save_checkpoint(epoch, model, optimizer, scheduler, best_val_cer, checkpoint_path="checkpoint.pt"):
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "best_val_cer": best_val_cer,
+    }
+    torch.save(checkpoint, checkpoint_path)
+
+
+def load_checkpoint(model, optimizer, scheduler, checkpoint_path="checkpoint.pt"):
+    if not os.path.exists(checkpoint_path):
+        print("No checkpoint found.")
+        return 0, float("inf")
+    
+    checkpoint = torch.load(checkpoint_path)
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+
+    start_epoch = checkpoint["epoch"] + 1
+    best_val_cer = checkpoint["best_val_cer"]
+
+    print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
+
+    return start_epoch, best_val_cer
+
+def objective(trial):
+    # hyperparams for optuna to to train defined here 
+    lr = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
+    # TODO dropout and warmup?
 
     # Build vocabulary 
     if VOCAB_PATH.exists():
@@ -173,7 +201,7 @@ def main():
     model = model.to(device)
 
     ctc_loss = nn.CTCLoss(blank=BLANK_IDX, zero_infinity=True)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
 
     # LR schedule: linear warmup for WARMUP_STEPS batches, then cosine decay
     # to ~0 over the rest of training. Warmup matters because at step 0 the
@@ -192,20 +220,29 @@ def main():
     #best_val_loss = float("inf")
     best_val_cer = float("inf")
 
+    start_epoch = 0
+    # not recommended with optuna as it needs a clean state every time to test hyperparams
+    '''
+    if os.path.exists(CHECKPOINT_PATH):
+            start_epoch, best_val_cer = load_checkpoint(
+                model,
+                optimizer,
+                scheduler,
+                CHECKPOINT_PATH
+            )
+    '''
 
     # Training Loop
     # Epoch is one clean sweep through all training examples
-    for epoch in range(NUM_EPOCHS):
+    for epoch in range(start_epoch, NUM_EPOCHS):
         model.train()
         total_train_loss = 0.0
         num_train_batches = 0
 
         for batch in train_loader:
-            
             if batch is None:   # whole batch was bad samples
                 continue # skip
 
-            # AC TODO add model.train() into v this function??
             batch_loss = train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device)
             total_train_loss += batch_loss
             num_train_batches += 1
@@ -243,10 +280,42 @@ def main():
                 'vocab_size':     VOCAB_SIZE,
                 'blank_idx':      BLANK_IDX,
             }
-            torch.save(checkpoint, "best_ctc_transformer.pt")
+            torch.save(checkpoint, f"best_ctc_transformer{trial.number}.pt")
             print("Saved new best model.")
+
+        # not recommended with optuna as it needs a clean state every time to test hyperparams
+        '''
+        save_checkpoint(
+            epoch,
+            model,
+            optimizer,
+            scheduler,
+            best_val_cer,
+            CHECKPOINT_PATH
+        )
+        '''
+
+        trial.report(val_cer, epoch)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
+        
     #done
     print("Training complete")
+    return best_val_cer
 
 if __name__ == "__main__":
-    main()
+    study = optuna.create_study(
+        direction="minimize", 
+        sampler=optuna.samplers.TPESampler(),
+        pruner=optuna.pruners.MedianPruner()  # Drops hopeless trials early
+    )
+    
+    # Run the optimization search
+    # TODO num trials? maybe 30 later
+    study.optimize(objective, n_trials=15)
+
+    print("\n--- Optimization Complete ---")
+    print(f"Best Trial Value (CER): {study.best_trial.value:.4f}")
+    print("Best Hyperparameters:")
+    for key, value in study.best_trial.params.items():
+        print(f"  {key}: {value}")
