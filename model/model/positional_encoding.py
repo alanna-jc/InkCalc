@@ -2,7 +2,8 @@ import math
 import torch
 
 # Adapted from Alanna's version which is commented out at the bottom of this file.
-# This new version returns a torch tensor instead of a numpy array.
+# This new version returns a torch tensor instead of a numpy array but implements
+# the exact same math.
 
 
 def positional_encoding(

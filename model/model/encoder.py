@@ -1,7 +1,10 @@
-from model.preprocessing.dataset import MAX_POINTS
 from model.positional_encoding import positional_encoding
 import torch
 from torch import nn
+
+#if MAX_POINTS gets changed, update it here and like everywhere else in the codebase where it is used 
+# pe = positional_encoding(512, depth=embed_dim)
+# (e.g. dataset.py, training_loop.py, etc.)
 
 class PositionWiseFFN(nn.Module):
     """
@@ -84,7 +87,7 @@ class TransformerEncoderBlock(nn.Module):
             x: insert shape 
         """
         norm = self.norm1(x)
-        # AC TODO add key_padding_mask
+        
         attn_output, _ = self.self_attention(norm, norm, norm, 
                                              key_padding_mask = key_padding_mask,
                                              need_weights = False) 
@@ -152,10 +155,10 @@ class CTCTransformer(nn.Module):
         super().__init__()
 
         self.input_projection = nn.Linear(4, embed_dim)  # input_dim is 4
-        pe = positional_encoding(MAX_POINTS, depth=embed_dim)  
+        # oh wait i think need to match the 512 to a specific param in positional_encoding function!
+        pe = positional_encoding(512, depth=embed_dim)  
         self.register_buffer('pe', pe)  # Register as buffer to avoid being treated as a parameter
         
-        # AC TODO : any inputs needed here
         self.encoder = TransformerEncoder(num_layers = num_layers, 
                                           num_heads = num_heads, 
                                           ffn_num_hidden = ffn_num_hidden, 
