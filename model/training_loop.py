@@ -1,3 +1,6 @@
+import math
+from sched import scheduler
+
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -23,7 +26,8 @@ TRAIN_DIR     = Path('data/mathwriting-2024/train')
 VAL_DIR       = Path('data/mathwriting-2024/valid')
 VOCAB_PATH    = Path('vocab.json')
 BATCH_SIZE    = 256
-LEARNING_RATE = 1e-4 # MathWriting used 1e-3 i think?
+LEARNING_RATE = 1e-3 # MathWriting used 1e-3 i think?
+WARMUP_STEPS  = 4000   # batches spent ramping 0 -> peak ("Attention is all you need" used 4000)
 NUM_EPOCHS = 50 # dummy number
 
 # Model hyperparameters — single source of truth.
@@ -65,8 +69,15 @@ def train_one_batch(model, batch, optimizer, ctc_loss, device):
 
     # Backprop
     loss.backward()
-    optimizer.step()
 
+    # Gradient clipping: if the combined size (norm) of all gradients exceeds
+    # 1.0, scale them down to 1.0. Direction is kept, magnitude is capped —
+    # prevents one bad batch from catapulting the weights. Must run after
+    # backward() (gradients exist) and before step() (they get applied).
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+    optimizer.step()
+    scheduler.step()          # advance the LR schedule one batch
     return loss.item()
 
 def validate_one_epoch(model, val_loader, ctc_loss, device):
@@ -149,6 +160,20 @@ def main():
     ctc_loss = nn.CTCLoss(blank=BLANK_IDX, zero_infinity=True)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
+    # LR schedule: linear warmup for WARMUP_STEPS batches, then cosine decay
+    # to ~0 over the rest of training. Warmup matters because at step 0 the
+    # attention weights are random — big updates then are pure noise. Decay
+    # matters at the end — small steps let the model settle into a minimum.
+    total_steps = len(train_loader) * NUM_EPOCHS
+
+    def lr_lambda(step):
+        if step < WARMUP_STEPS:
+            return step / max(WARMUP_STEPS, 1)              # 0 -> 1 linearly
+        progress = (step - WARMUP_STEPS) / max(total_steps - WARMUP_STEPS, 1)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))   # 1 -> 0 cosine
+
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
     # AC TODO should be initialized at what?
     best_val_loss = float("inf")
 
@@ -167,7 +192,7 @@ def main():
                 continue # skip
 
             # AC TODO add model.train() into v this function??
-            batch_loss = train_one_batch(model, batch, optimizer, ctc_loss, device)
+            batch_loss = train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device)
             total_train_loss += batch_loss
             num_train_batches += 1
 
@@ -188,6 +213,8 @@ def main():
             # exact same architecture before loading the weights into it.
             checkpoint = {
                 'model_state_dict': model.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
                 'epoch':          epoch + 1,
                 'valid_loss':     val_loss,
                 'input_dim':      INPUT_DIM,

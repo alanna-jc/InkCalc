@@ -236,6 +236,23 @@ def run_recognition(strokes: list[list[tuple]]) -> tuple[str | None, str | None]
         session = _get_session()
         points, lengths = _preprocess(strokes, _meta['max_points'])
 
+        # ------------------------------------------------------------------
+        # TODO (new CTCTransformer model — implement when deploying it):
+        # The model exported by the rewritten export_onnx.py takes TWO inputs:
+        #     points           float32 (batch, max_points, 4)
+        #     key_padding_mask bool    (batch, max_points)  True = padding
+        # It no longer accepts int lengths. Replace the feed below with:
+        #
+        #     actual_len = int(lengths[0])
+        #     mask = (np.arange(_meta['max_points']) >= actual_len)[None, :]  # (1, max_points) bool
+        #     feed = {'points': points, 'key_padding_mask': mask}
+        #
+        # Also note: the new model outputs log-probabilities ('log_probs',
+        # log_softmax already applied inside the graph). Greedy argmax
+        # decoding below is unaffected (argmax of log-probs == argmax of
+        # logits), but anything that treats the output as raw logits isn't.
+        # The old feed logic below only works with the legacy model.onnx.
+        # ------------------------------------------------------------------
         input_names = [inp.name for inp in session.get_inputs()]
         output_name = session.get_outputs()[0].name
         feed = {input_names[0]: points}
