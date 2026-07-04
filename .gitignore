@@ -1,3 +1,16 @@
+# ── InkCalc: datasets, checkpoints, exports ──────────────────────
+# MathWriting dataset (several GB of .inkml — never commit).
+# Trailing slash = directories only; leading pattern without / matches
+# at any depth, so this covers model/data/ and a root-level data/ alike.
+mathwriting-2024/
+
+# Model checkpoints (hundreds of MB each)
+*.pt
+checkpoints/
+
+# ONNX export output folder
+export/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
