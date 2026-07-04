@@ -10,6 +10,7 @@ from model.encoder import CTCTransformer
 from pathlib import Path
 from vocab import build_vocab, save_vocab, load_vocab, BLANK_IDX
 from preprocessing.dataset import build_dataloader, collect_labels, MAX_POINTS
+from postprocessing.ctc_decode import greedy_ctc_decode, edit_distance
 
 
 # i dont think these get used ever? 
@@ -84,6 +85,8 @@ def validate_one_epoch(model, val_loader, ctc_loss, device):
     model.eval()
     total_loss = 0.0
     num_batches = 0
+    total_edits = 0          # sum of edit distances
+    total_target_tokens = 0  # sum of reference lengths
 
     with torch.no_grad():
     
@@ -105,7 +108,19 @@ def validate_one_epoch(model, val_loader, ctc_loss, device):
             total_loss += loss.item()
             num_batches += 1
 
-    return total_loss / max(num_batches, 1)
+            # ── CER ──
+            preds = greedy_ctc_decode(logits, input_lengths, BLANK_IDX)
+            targets_cpu = targets.cpu()
+            offset = 0
+            for b, tlen in enumerate(target_lengths.tolist()):
+                ref = targets_cpu[offset : offset + tlen].tolist()
+                offset += tlen
+                total_edits += edit_distance(preds[b], ref)
+                total_target_tokens += tlen
+
+    avg_loss = total_loss / max(num_batches, 1)
+    cer = total_edits / max(total_target_tokens, 1)
+    return avg_loss, cer
 
 def main():
 
@@ -174,10 +189,9 @@ def main():
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-    # AC TODO should be initialized at what?
-    best_val_loss = float("inf")
+    #best_val_loss = float("inf")
+    best_val_cer = float("inf")
 
-    # AC TODO how do we want to deal with batches and epochs?
 
     # Training Loop
     # Epoch is one clean sweep through all training examples
@@ -198,14 +212,15 @@ def main():
 
         avg_train_loss = total_train_loss / max(num_train_batches, 1)
 
-        val_loss = validate_one_epoch(model, val_loader, ctc_loss, device)
+        val_loss, val_cer = validate_one_epoch(model, val_loader, ctc_loss, device)
 
-        print(f"Epoch {epoch+1}/{NUM_EPOCHS} | train loss: {avg_train_loss:.4f} | val loss: {val_loss:.4f}")
-        
+        print(f"Epoch {epoch+1}/{NUM_EPOCHS} | train loss: {avg_train_loss:.4f} | val loss: {val_loss:.4f} | val CER: {val_cer:.4f}")
+
         # save best
-        if val_loss < best_val_loss:
+        if val_cer < best_val_cer:
 
-            best_val_loss = val_loss
+            best_val_cer = val_cer
+            
             # Save a full checkpoint dict, not a bare state_dict.
             # 'model_state_dict' holds the learned weights (keyed by nn.Module
             # attribute names — which is why every layer needs its own instance).
@@ -217,6 +232,7 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'epoch':          epoch + 1,
                 'valid_loss':     val_loss,
+                'valid_cer':      val_cer,
                 'input_dim':      INPUT_DIM,
                 'embed_dim':      EMBED_DIM,
                 'num_layers':     NUM_LAYERS,
@@ -229,8 +245,6 @@ def main():
             }
             torch.save(checkpoint, "best_ctc_transformer.pt")
             print("Saved new best model.")
-
-        # report CER and ES? not part of training loop AC TODO
     #done
     print("Training complete")
 
