@@ -1,4 +1,6 @@
-from model.preprocessing.dataset import MAX_POINTS
+#if you are changing MAX_POINTS, you will need to change it here and elsewhere too 
+#from model.preprocessing.dataset import MAX_POINTS 
+
 from model.positional_encoding import positional_encoding
 import torch
 from torch import nn
@@ -148,11 +150,11 @@ class CTCTransformer(nn.Module):
         vocab_size: total number of output classes including one blank for CTC 
         embed_dim: hidden dim of model, default of 512 from "MathWriting: ..."
     """
-    def __init__(self, vocab_size, num_layers = 11, num_heads = 8, ffn_num_hidden = 2048, embed_dim = 512, dropout = 0.15):
+    def __init__(self, vocab_size, num_layers = 11, num_heads = 8, ffn_num_hidden = 2048, embed_dim = 512, max_points = 512, dropout = 0.15):
         super().__init__()
 
         self.input_projection = nn.Linear(4, embed_dim)  # input_dim is 4
-        pe = positional_encoding(MAX_POINTS, depth=embed_dim)  
+        pe = positional_encoding(seq_length = max_points, depth = embed_dim)  
         self.register_buffer('pe', pe)  # Register as buffer to avoid being treated as a parameter
         
         # AC TODO : any inputs needed here
@@ -167,7 +169,7 @@ class CTCTransformer(nn.Module):
     def forward(self, x, key_padding_mask):
         """
         Args:
-            x: Tensor of shape (batch_size, seq_len, embed_dim)
+            x: Tensor of shape (batch_size, seq_len, 4)
             key_padding_mask: Bool tensor of shape (batch_size, seq_len)
 
         Returns: 

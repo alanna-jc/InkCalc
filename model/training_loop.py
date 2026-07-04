@@ -125,7 +125,7 @@ def main():
     # init of model and optimizer
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = CTCTransformer(vocab_size = VOCAB_SIZE)
+    model = CTCTransformer(vocab_size = VOCAB_SIZE, max_points = MAX_POINTS)  # AC TODO add any other args needed here
     model = model.to(device)
 
     ctc_loss = nn.CTCLoss(blank=BLANK_IDX, zero_infinity=True)
