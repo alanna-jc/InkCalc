@@ -5,6 +5,10 @@ from model.positional_encoding import positional_encoding
 import torch
 from torch import nn
 
+#if MAX_POINTS gets changed, update it here and like everywhere else in the codebase where it is used 
+# pe = positional_encoding(512, depth=embed_dim)
+# (e.g. dataset.py, training_loop.py, etc.)
+
 class PositionWiseFFN(nn.Module):
     """
         A positionwise feedforward network that expands and then contracts the amount of dims
@@ -86,7 +90,7 @@ class TransformerEncoderBlock(nn.Module):
             x: insert shape 
         """
         norm = self.norm1(x)
-        # AC TODO add key_padding_mask
+        
         attn_output, _ = self.self_attention(norm, norm, norm, 
                                              key_padding_mask = key_padding_mask,
                                              need_weights = False) 
@@ -157,7 +161,6 @@ class CTCTransformer(nn.Module):
         pe = positional_encoding(seq_length = max_points, depth = embed_dim)  
         self.register_buffer('pe', pe)  # Register as buffer to avoid being treated as a parameter
         
-        # AC TODO : any inputs needed here
         self.encoder = TransformerEncoder(num_layers = num_layers, 
                                           num_heads = num_heads, 
                                           ffn_num_hidden = ffn_num_hidden, 
@@ -176,7 +179,7 @@ class CTCTransformer(nn.Module):
             logits: of shape (batch, seq_len, vocab size) 
         """
 
-        x =self.input_projection(x)  #(B,T,4) -> (B,T,embed_dim)
+        x =self.input_projection(x)  #(B,T,4) -> (B,T,embed_dim=512) 
         x = x + self.pe[:x.size(1)]
 
         ## Explicitly route the mask down to the encoder

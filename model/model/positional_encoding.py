@@ -1,6 +1,10 @@
 import math
 import torch
 
+# Adapted from Alanna's version which is commented out at the bottom of this file.
+# This new version returns a torch tensor instead of a numpy array but implements
+# the exact same math.
+
 
 def positional_encoding(
     seq_length: int,
@@ -28,7 +32,6 @@ def positional_encoding(
 
     # Returns:
     #     Tensor with shape:
-
     #         [seq_length, depth]
    
 
@@ -67,7 +70,7 @@ def positional_encoding(
 
     positional_encodings[:, 0::2] = torch.sin(angles)
 
-    # This slice also supports an odd embedding dimension.
+    # supports an odd embedding dimension (which we don't have but just for completeness)
     cosine_columns = positional_encodings[:, 1::2].shape[1]
     positional_encodings[:, 1::2] = torch.cos(
         angles[:, :cosine_columns]
@@ -75,9 +78,7 @@ def positional_encoding(
 
     return positional_encodings.to(dtype=dtype)
 
-
-
-# # TODO copilot suggest something about supporting device / dtype
+# OLD VERSION!
 # def positional_encoding(seq_length, depth):
 #     """
 #     This class implements the Positional Encoding formulas from "Attention is all you need" section 3.5.
@@ -103,5 +104,3 @@ def positional_encoding(
 #     pe[:,1::2] = np.cos(position * div_term)
 
 #     return pe
-
-
