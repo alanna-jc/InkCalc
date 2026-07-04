@@ -26,6 +26,16 @@ BATCH_SIZE    = 256
 LEARNING_RATE = 1e-4 # MathWriting used 1e-3 i think?
 NUM_EPOCHS = 50 # dummy number
 
+# Model hyperparameters — single source of truth.
+# Used for (1) constructing the model, (2) the checkpoint dict, so that
+# export_onnx.py can rebuild the exact same architecture without guessing.
+INPUT_DIM      = 4      # [dx, dy, dt, pen_state]
+EMBED_DIM      = 512    # MathWriting section 4.2
+NUM_LAYERS     = 11     # MathWriting section 4.2
+NUM_HEADS      = 8
+FFN_NUM_HIDDEN = 2048   # "Attention is all you need"
+DROPOUT        = 0.15   # MathWriting section 4.2
+
 
 def train_one_batch(model, batch, optimizer, ctc_loss, device):
     """
@@ -125,7 +135,15 @@ def main():
     # init of model and optimizer
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = CTCTransformer(vocab_size = VOCAB_SIZE, max_points = MAX_POINTS)  # AC TODO add any other args needed here
+    model = CTCTransformer(
+        vocab_size     = VOCAB_SIZE,
+        max_points     = MAX_POINTS,
+        num_layers     = NUM_LAYERS,
+        num_heads      = NUM_HEADS,
+        ffn_num_hidden = FFN_NUM_HIDDEN,
+        embed_dim      = EMBED_DIM,
+        dropout        = DROPOUT,
+    )
     model = model.to(device)
 
     ctc_loss = nn.CTCLoss(blank=BLANK_IDX, zero_infinity=True)
@@ -163,11 +181,26 @@ def main():
         if val_loss < best_val_loss:
 
             best_val_loss = val_loss
-            # AC TODO change to not a .pt
-            # AC TODO note how this works. This saves weights that are learnt at every stage of model in a tensor
-            # It recognizes each section of the model using nn.Module
-            # This is also why you need a different instance of each layer in the model
-            torch.save(model.state_dict(), "best_ctc_transformer.pt")
+            # Save a full checkpoint dict, not a bare state_dict.
+            # 'model_state_dict' holds the learned weights (keyed by nn.Module
+            # attribute names — which is why every layer needs its own instance).
+            # The rest is the metadata export_onnx.py needs to rebuild the
+            # exact same architecture before loading the weights into it.
+            checkpoint = {
+                'model_state_dict': model.state_dict(),
+                'epoch':          epoch + 1,
+                'valid_loss':     val_loss,
+                'input_dim':      INPUT_DIM,
+                'embed_dim':      EMBED_DIM,
+                'num_layers':     NUM_LAYERS,
+                'num_heads':      NUM_HEADS,
+                'ffn_num_hidden': FFN_NUM_HIDDEN,
+                'dropout':        DROPOUT,
+                'max_points':     MAX_POINTS,
+                'vocab_size':     VOCAB_SIZE,
+                'blank_idx':      BLANK_IDX,
+            }
+            torch.save(checkpoint, "best_ctc_transformer.pt")
             print("Saved new best model.")
 
         # report CER and ES? not part of training loop AC TODO
