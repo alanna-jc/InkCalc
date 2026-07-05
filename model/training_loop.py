@@ -20,6 +20,7 @@ TRAIN_DIR     = Path('data/mathwriting-2024/train')
 VAL_DIR       = Path('data/mathwriting-2024/valid')
 VOCAB_PATH    = Path('vocab.json')
 CHECKPOINT_PATH = "checkpoint.pt"
+SAVE_CHECKPOINTS = FALSE   # flip to False for quick hyperparameter-search runs
 
 BATCH_SIZE    = 256
 #LEARNING_RATE = 1e-3 # MathWriting used 1e-3 i think? optuna now auto creates this
@@ -281,8 +282,9 @@ def objective(trial):
                 'vocab_size':     VOCAB_SIZE,
                 'blank_idx':      BLANK_IDX,
             }
-            torch.save(checkpoint, f"best_ctc_transformer{trial.number}.pt")
-            print("Saved new best model.")
+            if SAVE_CHECKPOINTS:
+                torch.save(checkpoint, f"best_ctc_transformer{trial.number}.pt")
+                print("Saved new best model.")
 
         # not recommended with optuna as it needs a clean state every time to test hyperparams
         '''
