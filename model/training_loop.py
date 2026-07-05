@@ -267,6 +267,7 @@ def objective(trial):
                 'model_state_dict': model.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'learning_rate': lr,
                 'epoch':          epoch + 1,
                 'valid_loss':     val_loss,
                 'valid_cer':      val_cer,
