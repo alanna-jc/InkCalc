@@ -24,7 +24,7 @@ SAVE_CHECKPOINTS = FALSE   # flip to False for quick hyperparameter-search runs
 
 BATCH_SIZE    = 256
 #LEARNING_RATE = 1e-3 # MathWriting used 1e-3 i think? optuna now auto creates this
-WARMUP_STEPS  = 4000   # batches spent ramping 0 -> peak ("Attention is all you need" used 4000)
+#WARMUP_STEPS  = 4000   # batches spent ramping 0 -> peak ("Attention is all you need" used 4000)
 NUM_EPOCHS = 50 # dummy number
 
 # Model hyperparameters — single source of truth.
@@ -151,8 +151,9 @@ def load_checkpoint(model, optimizer, scheduler, checkpoint_path="checkpoint.pt"
 def objective(trial):
     # hyperparams for optuna to to train defined here 
     lr = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
+    warmup_ratio = trial.suggest_float("warmup_ratio", 0.0, 0.1)
     # TODO dropout and warmup?
-
+   
     # Build vocabulary 
     if VOCAB_PATH.exists():
         print('[main] Loading existing vocab …')
@@ -209,11 +210,12 @@ def objective(trial):
     # attention weights are random — big updates then are pure noise. Decay
     # matters at the end — small steps let the model settle into a minimum.
     total_steps = len(train_loader) * NUM_EPOCHS
+    warmup_steps = max(int(warmup_ratio * total_steps), 1)
 
     def lr_lambda(step):
-        if step < WARMUP_STEPS:
-            return step / max(WARMUP_STEPS, 1)              # 0 -> 1 linearly
-        progress = (step - WARMUP_STEPS) / max(total_steps - WARMUP_STEPS, 1)
+        if step < warmup_steps:
+            return step / warmup_steps              # 0 -> 1 linearly
+        progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
         return 0.5 * (1.0 + math.cos(math.pi * progress))   # 1 -> 0 cosine
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
