@@ -1,6 +1,4 @@
 import math
-#from sched import scheduler
-import optuna
 import os
 
 import torch
@@ -22,13 +20,13 @@ VOCAB_PATH    = Path('vocab.json')
 CHECKPOINT_PATH = "checkpoint.pt"
 
 BATCH_SIZE    = 256
-#LEARNING_RATE = 1e-3 # MathWriting used 1e-3 i think? optuna now auto creates this
-WARMUP_STEPS  = 4000   # batches spent ramping 0 -> peak ("Attention is all you need" used 4000)
+LEARNING_RATE = 1e-3 # MathWriting used 1e-3 i think?
+WARMUP_STEPS  = 4000 # batches spent ramping 0 -> peak ("Attention is all you need" used 4000)
 NUM_EPOCHS = 50 # dummy number
 
 # Model hyperparameters — single source of truth.
 # Used for (1) constructing the model, (2) the checkpoint dict, so that
-# export_onnx.py can rebuild the exact same architecture without guessing.
+# export_onnx.py can rebuild the exact same architecture without guessing
 INPUT_DIM      = 4      # [dx, dy, dt, pen_state]
 EMBED_DIM      = 512    # MathWriting section 4.2
 NUM_LAYERS     = 11     # MathWriting section 4.2
@@ -75,6 +73,7 @@ def train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device):
     optimizer.step()
     scheduler.step()          # advance the LR schedule one batch
     return loss.item()
+
 
 def validate_one_epoch(model, val_loader, ctc_loss, device):
     model.eval()
@@ -147,10 +146,7 @@ def load_checkpoint(model, optimizer, scheduler, checkpoint_path="checkpoint.pt"
 
     return start_epoch, best_val_cer
 
-def objective(trial):
-    # hyperparams for optuna to to train defined here 
-    lr = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
-    # TODO dropout and warmup?
+def main():
 
     # Build vocabulary 
     if VOCAB_PATH.exists():
@@ -201,7 +197,7 @@ def objective(trial):
     model = model.to(device)
 
     ctc_loss = nn.CTCLoss(blank=BLANK_IDX, zero_infinity=True)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     # LR schedule: linear warmup for WARMUP_STEPS batches, then cosine decay
     # to ~0 over the rest of training. Warmup matters because at step 0 the
@@ -222,7 +218,7 @@ def objective(trial):
 
     start_epoch = 0
     # not recommended with optuna as it needs a clean state every time to test hyperparams
-    '''
+    
     if os.path.exists(CHECKPOINT_PATH):
             start_epoch, best_val_cer = load_checkpoint(
                 model,
@@ -230,7 +226,6 @@ def objective(trial):
                 scheduler,
                 CHECKPOINT_PATH
             )
-    '''
 
     # Training Loop
     # Epoch is one clean sweep through all training examples
@@ -267,7 +262,6 @@ def objective(trial):
                 'model_state_dict': model.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'learning_rate': lr,
                 'epoch':          epoch + 1,
                 'valid_loss':     val_loss,
                 'valid_cer':      val_cer,
@@ -281,11 +275,9 @@ def objective(trial):
                 'vocab_size':     VOCAB_SIZE,
                 'blank_idx':      BLANK_IDX,
             }
-            torch.save(checkpoint, f"best_ctc_transformer{trial.number}.pt")
+            torch.save(checkpoint, "best_ctc_transformer.pt")
             print("Saved new best model.")
-
-        # not recommended with optuna as it needs a clean state every time to test hyperparams
-        '''
+        
         save_checkpoint(
             epoch,
             model,
@@ -294,29 +286,9 @@ def objective(trial):
             best_val_cer,
             CHECKPOINT_PATH
         )
-        '''
-
-        trial.report(val_cer, epoch)
-        if trial.should_prune():
-            raise optuna.TrialPruned()
         
     #done
     print("Training complete")
-    return best_val_cer
 
 if __name__ == "__main__":
-    study = optuna.create_study(
-        direction="minimize", 
-        sampler=optuna.samplers.TPESampler(),
-        pruner=optuna.pruners.MedianPruner()  # Drops hopeless trials early
-    )
-    
-    # Run the optimization search
-    # TODO num trials? maybe 30 later
-    study.optimize(objective, n_trials=15)
-
-    print("\n--- Optimization Complete ---")
-    print(f"Best Trial Value (CER): {study.best_trial.value:.4f}")
-    print("Best Hyperparameters:")
-    for key, value in study.best_trial.params.items():
-        print(f"  {key}: {value}")
+    main()
