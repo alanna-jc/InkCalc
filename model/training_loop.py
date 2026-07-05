@@ -20,7 +20,7 @@ TRAIN_DIR     = Path('data/mathwriting-2024/train')
 VAL_DIR       = Path('data/mathwriting-2024/valid')
 VOCAB_PATH    = Path('vocab.json')
 CHECKPOINT_PATH = "checkpoint.pt"
-SAVE_CHECKPOINTS = FALSE   # flip to False for quick hyperparameter-search runs
+SAVE_CHECKPOINTS = False   # flip to False for quick hyperparameter-search runs
 
 BATCH_SIZE    = 256
 #LEARNING_RATE = 1e-3 # MathWriting used 1e-3 i think? optuna now auto creates this
