@@ -1,4 +1,3 @@
-# Made with Chat GPT
 import torch
 from encoder import CTCTransformer
 

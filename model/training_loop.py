@@ -22,7 +22,7 @@ VOCAB_PATH    = Path('vocab.json')
 CHECKPOINT_PATH = "checkpoint.pt"
 
 BATCH_SIZE    = 256
-LEARNING_RATE = 1e-3 # MathWriting used 1e-3 i think?
+#LEARNING_RATE = 1e-3 # MathWriting used 1e-3 i think? optuna now auto creates this
 WARMUP_STEPS  = 4000   # batches spent ramping 0 -> peak ("Attention is all you need" used 4000)
 NUM_EPOCHS = 50 # dummy number
 
@@ -267,6 +267,7 @@ def objective(trial):
                 'model_state_dict': model.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'learning_rate': lr,
                 'epoch':          epoch + 1,
                 'valid_loss':     val_loss,
                 'valid_cer':      val_cer,
