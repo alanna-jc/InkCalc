@@ -225,9 +225,9 @@ def _collate_fn(batch: list) -> Optional[dict]:
 def build_dataloader(
     inkml_paths: list[str | Path],
     tok2idx: dict[str, int],
-    batch_size: int = 256,
+    batch_size: int = 256, # default value. actually gets assigned in training_loop
     shuffle: bool = True,
-    num_workers: int = 4,
+    num_workers: int = 12, # 16 available on lab machine
     max_points: int = MAX_POINTS,
     spatial_step: float = 0.05,
 ) -> DataLoader:
