@@ -13,9 +13,8 @@ from preprocessing.dataset import build_dataloader, collect_labels, MAX_POINTS
 from postprocessing.ctc_decode import greedy_ctc_decode, edit_distance
 
 
-# Paths: these are dummy paths right now!!!!
-TRAIN_DIR     = Path('data/mathwriting-2024/train')
-VAL_DIR       = Path('data/mathwriting-2024/valid')
+TRAIN_DIR     = Path('mathwriting-2024/train')
+VAL_DIR       = Path('mathwriting-2024/valid')
 VOCAB_PATH    = Path('vocab.json')
 CHECKPOINT_PATH = "checkpoint.pt"
 
