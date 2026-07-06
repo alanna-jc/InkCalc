@@ -125,7 +125,7 @@ def _resample_stroke(points: list[tuple]) -> list[tuple]:
 
 def _preprocess(strokes: list[list[tuple]], max_points: int):
     """
-    Strokes → (points_tensor, lengths_tensor) ready for ONNX inference.
+    Strokes → (points_tensor, key_padding_mask) ready for ONNX inference.
 
     strokes: draw_state.strokes — [ [(x, y, t), …], … ]
     x, y are screen pixel coords; t is time.time() epoch seconds.
@@ -138,6 +138,10 @@ def _preprocess(strokes: list[list[tuple]], max_points: int):
         5. Pad or truncate to max_points.
 
     Output features per point: [dx, dy, dt, pen_up]
+
+    Returns:
+        points           float32 (1, max_points, 4)  zero-padded features
+        key_padding_mask bool    (1, max_points)      True where padding
     """
     strokes = [s for s in strokes if s]
 
@@ -185,8 +189,11 @@ def _preprocess(strokes: list[list[tuple]], max_points: int):
         pad = np.zeros((max_points - N, 4), dtype=np.float32)
         features = np.concatenate([features, pad], axis=0)
 
+    # Build the boolean key padding mask the exported model expects:
+    # True where the position is padding (index >= actual_len).
     actual_len = min(N, max_points)
-    return features[np.newaxis], np.array([actual_len], dtype=np.int64)
+    key_padding_mask = (np.arange(max_points) >= actual_len)[np.newaxis, :]  # (1, max_points) bool
+    return features[np.newaxis], key_padding_mask
 
 
 # ---------------------------------------------------------------------------
@@ -234,33 +241,26 @@ def run_recognition(strokes: list[list[tuple]]) -> tuple[str | None, str | None]
             return None, 'Nothing drawn.'
 
         session = _get_session()
-        points, lengths = _preprocess(strokes, _meta['max_points'])
+        points, key_padding_mask = _preprocess(strokes, _meta['max_points'])
 
-        # ------------------------------------------------------------------
-        # TODO (new CTCTransformer model — implement when deploying it):
-        # The model exported by the rewritten export_onnx.py takes TWO inputs:
+        # The CTCTransformer model exported by export_onnx.py takes TWO inputs:
         #     points           float32 (batch, max_points, 4)
         #     key_padding_mask bool    (batch, max_points)  True = padding
-        # It no longer accepts int lengths. Replace the feed below with:
-        #
-        #     actual_len = int(lengths[0])
-        #     mask = (np.arange(_meta['max_points']) >= actual_len)[None, :]  # (1, max_points) bool
-        #     feed = {'points': points, 'key_padding_mask': mask}
-        #
-        # Also note: the new model outputs log-probabilities ('log_probs',
-        # log_softmax already applied inside the graph). Greedy argmax
-        # decoding below is unaffected (argmax of log-probs == argmax of
-        # logits), but anything that treats the output as raw logits isn't.
-        # The old feed logic below only works with the legacy model.onnx.
-        # ------------------------------------------------------------------
+        # and outputs log-probabilities ('log_probs', log_softmax already
+        # applied inside the graph). Greedy argmax decoding is unaffected
+        # (argmax of log-probs == argmax of logits). Feed by input name so we
+        # don't depend on the graph's input ordering.
         input_names = [inp.name for inp in session.get_inputs()]
         output_name = session.get_outputs()[0].name
         feed = {input_names[0]: points}
-        if len(input_names) > 1:
-            feed[input_names[1]] = lengths
+        if 'key_padding_mask' in input_names:
+            feed['key_padding_mask'] = key_padding_mask
+        elif len(input_names) > 1:
+            # Fallback: unknown second input name — feed positionally.
+            feed[input_names[1]] = key_padding_mask
 
-        logits = session.run([output_name], feed)[0]
-        latex  = _ctc_greedy_decode(logits, _vocab, _meta['blank_idx'])
+        log_probs = session.run([output_name], feed)[0]
+        latex  = _ctc_greedy_decode(log_probs, _vocab, _meta['blank_idx'])
 
         if not latex.strip():
             return None, 'Model returned an empty expression.'

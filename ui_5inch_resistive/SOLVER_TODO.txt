@@ -1,0 +1,82 @@
+SOLVER.PY — DEFERRED FIXES (not urgent; model training is the current focus)
+============================================================================
+These three issues were found in a code review. They do not affect model
+training — they only affect the Pi-side SymPy solver that runs AFTER
+recognition. Apply them when returning to the UI/solver work.
+
+
+------------------------------------------------------------------------
+M1 (MEDIUM) — run_solve lowercases ALL standalone capital letters
+------------------------------------------------------------------------
+Where:  run_solve(), around line 222-223
+
+    latex_str = re.sub(r'(?<![\\a-zA-Z])([A-Z])(?![a-zA-Z])',
+                       lambda m: m.group(1).lower(), latex_str)
+
+Problem:
+  - Applied to the whole string before branching, so it also rewrites
+    matrix entries and variable names (e.g. a system "A x = b").
+  - It collides with SymPy's reserved capitals: E (Euler's number),
+    I (imaginary unit), O (big-O), S, N, Q. Lowercasing "E" or "I" turns a
+    known constant into an ordinary free symbol and silently changes the math
+    (wrong-but-plausible answer, no error raised).
+
+Suggested fix — skip SymPy's reserved capitals:
+
+    _RESERVED = {'E', 'I', 'O', 'S', 'N', 'Q'}
+    latex_str = re.sub(
+        r'(?<![\\a-zA-Z])([A-Z])(?![a-zA-Z])',
+        lambda m: m.group(1) if m.group(1) in _RESERVED else m.group(1).lower(),
+        latex_str,
+    )
+
+  Better still: only lowercase specific tokens the recognition model is known
+  to over-capitalize, rather than blanket-lowercasing every capital. Revisit
+  once the trained model's actual output tendencies are known.
+
+
+------------------------------------------------------------------------
+M2 (MEDIUM) — nondeterministic symbol order in sympy.solve
+------------------------------------------------------------------------
+Where:  _solve_scalar() line ~184  and  _solve_matrix() line ~129
+
+    sol = sympy.solve(eq, list(free), dict=True)
+
+Problem:
+  - free = expr.free_symbols is a set; list(free) has arbitrary order.
+  - Displayed solution ordering (and, for underdetermined systems, which
+    symbol SymPy solves for) can change run to run.
+
+Suggested fix — sort deterministically in BOTH call sites:
+
+    sol = sympy.solve(eq, sorted(free, key=str), dict=True)
+
+
+------------------------------------------------------------------------
+M3 (MEDIUM) — numeric fallback can mangle results via nsimplify
+------------------------------------------------------------------------
+Where:  _solve_scalar() else-branch, lines ~199-203
+
+    result = sympy.simplify(expr)
+    if result.is_integer:
+        return str(int(result)), None
+    return _clean(sympy.pretty(sympy.nsimplify(result), use_unicode=True)), None
+
+Problem:
+  - For an ordinary non-integer decimal, nsimplify() tries to GUESS a closed
+    form (pi, sqrt, rationals). This can produce a surprising/incorrect
+    symbolic form for a plain decimal answer, and nsimplify can be slow.
+
+Suggested fix — prefer an exact rational/decimal presentation; only use
+nsimplify when closed-form guessing is actually wanted:
+
+    if result.is_number:
+        return _clean(sympy.pretty(
+            sympy.nsimplify(result, rational=True), use_unicode=True)), None
+
+  Or simply present result directly (and/or result.evalf()) without guessing.
+
+
+------------------------------------------------------------------------
+Reviewed: 2026-07-05
+============================================================================

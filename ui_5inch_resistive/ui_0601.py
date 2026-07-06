@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import xml.etree.ElementTree as ET
 import pygame
 
@@ -41,7 +42,8 @@ INTERP_DIST = 2
 
 
 # -------------------------------------------------------------
-# InkML export
+# InkML export - for debugging purposes only. not actually used
+# (main pipeline uses draw stroke directly)
 # -------------------------------------------------------------
 def strokes_to_inkml(strokes, t0=None):
     ink = ET.Element('ink', xmlns='http://www.w3.org/2003/InkML')
@@ -276,8 +278,17 @@ def draw_right_panel(screen, font, font_sm, font_mono,
 
     screen.set_clip(old_clip)
 
+    # How far content extends past the visible area — used by main() to clamp
+    # scroll_offset so history can't be dragged entirely off-screen. y already
+    # has scroll_offset subtracted, so (y + scroll_offset) is the unscrolled
+    # content bottom.
+    content_bottom = y + scroll_offset
+    max_scroll = max(0, content_bottom - content_rect.bottom + PAD)
+
     draw_button(screen, font, solve_rect,   BTN_SOLVE,  'solve')
     draw_button(screen, font, clear_r_rect, BTN_CLEAR,  'clear')
+
+    return max_scroll
 
 
 # -------------------------------------------------------------
@@ -331,8 +342,8 @@ def main():
     _MONO = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf'
     try:
         font      = pygame.font.Font(_SANS, 22)
-        font_sm   = pygame.font.Font(_SANS, 16)
-        font_mono = pygame.font.Font(_MONO, 14)
+        font_sm   = pygame.font.Font(_SANS, 18)
+        font_mono = pygame.font.Font(_MONO, 16)
     except FileNotFoundError:
         font      = pygame.font.Font(None, 28)
         font_sm   = pygame.font.Font(None, 22)
@@ -344,21 +355,45 @@ def main():
     draw_state       = DrawState()
     history          = []
     scroll_offset    = 0
+    max_scroll       = 0
     scroll_drag_y    = None
     processing       = False
     current_inferred = None
 
+    # Background work (ONNX recognition / SymPy solve) runs off the event loop
+    # so the UI never freezes. Workers only compute and stash a result under
+    # the lock; the main loop drains it and applies all state / surface changes
+    # on the main thread (pygame drawing is not thread-safe).
+    worker_lock   = threading.Lock()
+    worker_result = None   # ('recognition', (inferred, error)) | ('solve', (latex, result, error))
+
+    def _recognition_worker(strokes_snapshot):
+        nonlocal worker_result
+        inferred, error = run_recognition(strokes_snapshot)
+        with worker_lock:
+            worker_result = ('recognition', (inferred, error))
+
+    def _solve_worker(latex):
+        nonlocal worker_result
+        result, error = run_solve(latex)
+        with worker_lock:
+            worker_result = ('solve', (latex, result, error))
+
     def full_redraw():
+        nonlocal max_scroll
         screen.fill(BG)
         pygame.draw.rect(screen, DIVIDER_COL,
                          (SPLIT, 0, DIVIDER_W, H))
         draw_left_panel(screen, font, font_sm,
                         draw_state, canvas_rect, ink_surface,
                         clear_rect, submit_rect, SPLIT)
-        draw_right_panel(screen, font, font_sm, font_mono,
+        max_scroll = draw_right_panel(screen, font, font_sm, font_mono,
                          history, scroll_offset, current_inferred,
                          solve_rect, clear_r_rect,
                          right_panel_rect, inferred_rect, content_rect)
+        if processing:
+            note = font_sm.render('processing…', True, ACCENT)
+            screen.blit(note, (canvas_rect.x + 8, canvas_rect.y + 8))
         pygame.display.flip()
 
     def canvas_redraw():
@@ -408,25 +443,28 @@ def main():
 
                 elif submit_rect.collidepoint(px, py) and not processing:
                     if draw_state.has_content():
-                        processing       = True
-                        inferred, error  = run_recognition(
-                                              draw_state.strokes)
-                        current_inferred = inferred if not error else None
+                        processing = True
+                        # Snapshot strokes, clear the canvas immediately for
+                        # responsiveness, then recognize off-thread.
+                        strokes_snapshot = [list(s) for s in draw_state.strokes]
                         draw_state.clear()
                         ink_surface.fill(CANVAS_BG)
-                        processing       = False
-                        dirty            = True
+                        threading.Thread(
+                            target=_recognition_worker,
+                            args=(strokes_snapshot,),
+                            daemon=True,
+                        ).start()
+                        dirty = True
 
                 elif solve_rect.collidepoint(px, py) and not processing:
                     if current_inferred is not None:
                         processing = True
-                        result, error = run_solve(current_inferred)
-                        history.append(
-                            HistoryEntry(current_inferred, result, error))
-                        current_inferred = None
-                        scroll_offset    = 0
-                        processing       = False
-                        dirty            = True
+                        threading.Thread(
+                            target=_solve_worker,
+                            args=(current_inferred,),
+                            daemon=True,
+                        ).start()
+                        dirty = True
 
                 elif clear_r_rect.collidepoint(px, py):
                     history.clear()
@@ -449,7 +487,9 @@ def main():
 
                 if scroll_drag_y is not None:
                     delta         = scroll_drag_y - py
-                    scroll_offset = max(0, scroll_offset + delta)
+                    # Clamp to [0, max_scroll] (max_scroll from the last redraw)
+                    # so history can't be scrolled entirely off-screen.
+                    scroll_offset = max(0, min(scroll_offset + delta, max_scroll))
                     scroll_drag_y = py
                     dirty         = True
 
@@ -461,6 +501,23 @@ def main():
                 draw_state.end()
                 scroll_drag_y = None
                 dirty = True
+
+        # Drain any completed background work and apply it on the main thread.
+        with worker_lock:
+            res = worker_result
+            worker_result = None
+        if res is not None:
+            kind, payload = res
+            if kind == 'recognition':
+                inferred, error  = payload
+                current_inferred = inferred if not error else None
+            elif kind == 'solve':
+                latex, result, error = payload
+                history.append(HistoryEntry(latex, result, error))
+                current_inferred = None
+                scroll_offset    = 0
+            processing = False
+            dirty      = True
 
         if canvas_dirty:
             canvas_redraw()

@@ -10,8 +10,14 @@ import torch.nn as nn
 
 from model.encoder import CTCTransformer
 from pathlib import Path
+from torch.utils.data import DataLoader
 from vocab import build_vocab, save_vocab, load_vocab, BLANK_IDX
-from preprocessing.dataset import build_dataloader, collect_labels, MAX_POINTS
+from preprocessing.dataset import (
+    MathWritingDataset,
+    collect_labels,
+    _collate_fn,
+    MAX_POINTS,
+)
 from postprocessing.ctc_decode import greedy_ctc_decode, edit_distance
 
 
@@ -36,6 +42,41 @@ NUM_LAYERS     = 11     # MathWriting section 4.2
 NUM_HEADS      = 8
 FFN_NUM_HIDDEN = 2048   # "Attention is all you need"
 DROPOUT        = 0.15   # MathWriting section 4.2
+
+
+# ---------------------------------------------------------------------------
+# In-memory feature cache
+# ---------------------------------------------------------------------------
+# Feature extraction (InkML parse + resample + delta encode) is deterministic
+# given spatial_step and identical across every Optuna trial and every epoch —
+# only learning_rate / warmup_ratio change. So we extract features ONCE up
+# front (see __main__), cache them in memory, and let each epoch/trial just
+# index into the cache instead of re-parsing the whole subset ~750 times.
+
+class CachedDataset(torch.utils.data.Dataset):
+    """Wraps a pre-extracted list of (features, encoded_label) items."""
+
+    def __init__(self, items):
+        self.items = items
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, idx):
+        return self.items[idx]
+
+
+def precompute_items(paths, tok2idx):
+    """
+    Run the full parse + feature-extraction pipeline once and cache results.
+
+    None samples (bad parse / empty features / all-OOV label) are dropped here,
+    exactly as _collate_fn would drop them, so the cached list is ready to use.
+    """
+    base = MathWritingDataset(paths, tok2idx)
+    items = [item for item in (base[i] for i in range(len(base))) if item is not None]
+    print(f'[precompute] cached {len(items)}/{len(base)} usable samples')
+    return items
 
 
 def train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device):
@@ -148,49 +189,16 @@ def load_checkpoint(model, optimizer, scheduler, checkpoint_path="checkpoint.pt"
 
     return start_epoch, best_val_cer
 
-def objective(trial):
-    # hyperparams for optuna to to train defined here 
+def objective(trial, train_loader, val_loader, vocab_size, device):
+    # Hyperparameters Optuna searches this run (dropout is fixed at DROPOUT).
     lr = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
     warmup_ratio = trial.suggest_float("warmup_ratio", 0.0, 0.1)
-    # TODO dropout and warmup?
-   
-    # Build vocabulary 
-    if VOCAB_PATH.exists():
-        print('[main] Loading existing vocab …')
-        tok2idx, idx2tok, meta = load_vocab(VOCAB_PATH)
-    else:
-        print('[main] Building vocab from train split …')
-        labels = collect_labels(TRAIN_DIR, use_normalized=True)
-        tok2idx, idx2tok = build_vocab(labels)
-        meta = {
-            'max_points':  MAX_POINTS,
-            'blank_idx':   BLANK_IDX,
-            'vocab_size':  len(idx2tok),
-        }
-        save_vocab(idx2tok, meta, VOCAB_PATH)
 
-    VOCAB_SIZE = meta['vocab_size']
-    print(f'[main] Vocab size: {VOCAB_SIZE}')
-
-   
-    # -------------------------------------------------------------------
-    # load dataset 
-    # create input to model
-    # this involves parsing and positional embeddings
-    train_paths = sorted(TRAIN_DIR.glob('*.inkml'))
-    val_paths   = sorted(VAL_DIR.glob('*.inkml'))
-
-    train_loader = build_dataloader(
-        train_paths, tok2idx, batch_size=BATCH_SIZE, shuffle=True
-    )
-    val_loader = build_dataloader(
-        val_paths, tok2idx, batch_size=BATCH_SIZE, shuffle=False
-    )
-    # -------------------------------------------------------------------
+    # Vocab, data loaders (with cached features) and device are built ONCE in
+    # __main__ and passed in, so no parsing/extraction happens per trial.
+    VOCAB_SIZE = vocab_size
 
     # init of model and optimizer
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     model = CTCTransformer(
         vocab_size     = VOCAB_SIZE,
         max_points     = MAX_POINTS,
@@ -215,7 +223,13 @@ def objective(trial):
     def lr_lambda(step):
         if step < warmup_steps:
             return step / warmup_steps              # 0 -> 1 linearly
+        # Clamp progress to [0, 1]. total_steps assumes one scheduler.step()
+        # per DataLoader batch, but None (all-bad) batches are skipped without
+        # stepping, so the real step count can fall short of total_steps.
+        # Without clamping, progress would never reach 1 (LR never fully
+        # decays); and if it ever exceeded 1, cos would swing the LR back up.
         progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+        progress = min(max(progress, 0.0), 1.0)
         return 0.5 * (1.0 + math.cos(math.pi * progress))   # 1 -> 0 cosine
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -309,15 +323,58 @@ def objective(trial):
     return best_val_cer
 
 if __name__ == "__main__":
+    # ── One-time setup shared by every trial ─────────────────────────────────
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f'[main] Device: {device}')
+
+    # Build vocabulary (once).
+    if VOCAB_PATH.exists():
+        print('[main] Loading existing vocab …')
+        tok2idx, idx2tok, meta = load_vocab(VOCAB_PATH)
+    else:
+        print('[main] Building vocab from train split …')
+        labels = collect_labels(TRAIN_DIR, use_normalized=True)
+        tok2idx, idx2tok = build_vocab(labels)
+        meta = {
+            'max_points':  MAX_POINTS,
+            'blank_idx':   BLANK_IDX,
+            'vocab_size':  len(idx2tok),
+        }
+        save_vocab(idx2tok, meta, VOCAB_PATH)
+    VOCAB_SIZE = meta['vocab_size']
+    print(f'[main] Vocab size: {VOCAB_SIZE}')
+
+    # Extract features ONCE and cache in memory — reused by all trials/epochs.
+    train_paths = sorted(TRAIN_DIR.glob('*.inkml'))
+    val_paths   = sorted(VAL_DIR.glob('*.inkml'))
+    print('[main] Precomputing train features …')
+    train_items = precompute_items(train_paths, tok2idx)
+    print('[main] Precomputing val features …')
+    val_items   = precompute_items(val_paths, tok2idx)
+
+    # num_workers=0: extraction already happened, so collate is cheap and the
+    # cache stays in this one process (worker processes wouldn't share it).
+    train_loader = DataLoader(
+        CachedDataset(train_items), batch_size=BATCH_SIZE,
+        shuffle=True, num_workers=0, collate_fn=_collate_fn,
+    )
+    val_loader = DataLoader(
+        CachedDataset(val_items), batch_size=BATCH_SIZE,
+        shuffle=False, num_workers=0, collate_fn=_collate_fn,
+    )
+
     study = optuna.create_study(
-        direction="minimize", 
+        direction="minimize",
         sampler=optuna.samplers.TPESampler(),
         pruner=optuna.pruners.MedianPruner()  # Drops hopeless trials early
     )
-    
+
     # Run the optimization search
     # TODO num trials? maybe 30 later
-    study.optimize(objective, n_trials=15)
+    study.optimize(
+        lambda trial: objective(trial, train_loader, val_loader, VOCAB_SIZE, device),
+        n_trials=15,
+    )
 
     print("\n--- Optimization Complete ---")
     print(f"Best Trial Value (CER): {study.best_trial.value:.4f}")
