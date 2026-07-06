@@ -60,21 +60,98 @@ def stage1_mask_and_pe(model, x):
     print("Stage 1 OK — mask isolates padding, positional encoding is active")
 
 
+def _labels_for(paths):
+    """Extract labels for a specific set of files (prefer normalizedLabel).
+
+    Mirrors dataset.collect_labels but for an explicit path list, so the
+    overfit vocab can be built from exactly the files we train on (no OOV).
+    """
+    from preprocessing.inkml_parser import InkMLParser, InkMLParseError
+
+    parser = InkMLParser(require_time=False)
+    labels = []
+    for p in paths:
+        try:
+            sample = parser.parse(p)
+        except (InkMLParseError, FileNotFoundError):
+            continue
+        meta_lower = {k.lower(): v for k, v in sample.metadata.items()}
+        label = meta_lower.get('normalizedlabel') or sample.label
+        if label:
+            labels.append(label)
+    return labels
+
+
 def stage2_overfit():
-    """Train on 50 real files, validate on the same 50. Must approach CER 0."""
-    from training_loop import train_model, TRAIN_DIR   # safe: main() is __main__-guarded
+    """Train on 50 real files, validate on the same 50. Must approach CER 0.
+
+    Self-contained: reuses train_one_batch/validate_one_epoch and the model
+    hyperparameters from training_loop.py, but drives the loop here so no
+    changes to training_loop.py are needed. main() there is __main__-guarded,
+    so importing it runs no training.
+    """
+    import torch.nn as nn
+    import torch.optim as optim
+
+    from vocab import build_vocab, BLANK_IDX
+    from preprocessing.dataset import build_dataloader, MAX_POINTS
+    from training_loop import (
+        train_one_batch, validate_one_epoch, TRAIN_DIR,
+        EMBED_DIM, NUM_LAYERS, NUM_HEADS, FFN_NUM_HIDDEN, DROPOUT,
+    )
 
     paths = sorted(TRAIN_DIR.glob('*.inkml'))[:50]
     assert paths, f"no .inkml files found in {TRAIN_DIR}"
 
-    print(f"Stage 2 — overfitting {len(paths)} samples, expect CER -> ~0 …")
-    best_cer = train_model(
-        train_paths=paths,
-        val_paths=paths,          # same files on purpose — testing memorization
-        lr=3e-4,
-        num_epochs=300,
-        checkpoint_name="smoke.pt",
-    )
+    NUM_EPOCHS = 300
+    LR         = 3e-4
+    BATCH      = 16
+
+    # Vocab from exactly these files → guarantees no OOV drops for this test.
+    tok2idx, idx2tok = build_vocab(_labels_for(paths))
+
+    # num_workers=0: solo, deterministic, no Windows spawn overhead for 50 files.
+    train_loader = build_dataloader(
+        paths, tok2idx, batch_size=BATCH, shuffle=True,  num_workers=0)
+    val_loader = build_dataloader(
+        paths, tok2idx, batch_size=BATCH, shuffle=False, num_workers=0)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = CTCTransformer(
+        vocab_size     = len(idx2tok),
+        max_points     = MAX_POINTS,
+        num_layers     = NUM_LAYERS,
+        num_heads      = NUM_HEADS,
+        ffn_num_hidden = FFN_NUM_HIDDEN,
+        embed_dim      = EMBED_DIM,
+        dropout        = DROPOUT,
+    ).to(device)
+
+    ctc_loss  = nn.CTCLoss(blank=BLANK_IDX, zero_infinity=True)
+    optimizer = optim.Adam(model.parameters(), lr=LR)
+    # Constant LR: the real warmup schedule (WARMUP_STEPS=4000) would never
+    # leave the ramp in a ~300-step overfit and the test would fail spuriously.
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lambda step: 1.0)
+
+    print(f"Stage 2 — overfitting {len(paths)} samples on {device}, "
+          f"expect CER -> ~0 …")
+
+    best_cer = float("inf")
+    for epoch in range(NUM_EPOCHS):
+        model.train()
+        for batch in train_loader:
+            if batch is None:
+                continue
+            train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device)
+
+        _, val_cer = validate_one_epoch(model, val_loader, ctc_loss, device)
+        best_cer = min(best_cer, val_cer)
+
+        if epoch % 20 == 0 or best_cer < 0.10:
+            print(f"  epoch {epoch+1:>3}/{NUM_EPOCHS} | CER {val_cer:.4f} | best {best_cer:.4f}")
+        if best_cer < 0.01:                       # memorized — no need to keep going
+            break
+
     print(f"Stage 2 result: best CER on training data = {best_cer:.4f}")
     assert best_cer < 0.10, (
         "OVERFIT FAILED: model can't memorize 50 samples — suspect decode, "
