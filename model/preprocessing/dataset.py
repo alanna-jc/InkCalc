@@ -24,12 +24,15 @@ Why targets is 1-D (concatenated rather than 2-D padded):
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
+
+logger = logging.getLogger(__name__)
 
 try:
     from .inkml_parser import InkMLParser, InkMLParseError
@@ -113,18 +116,21 @@ class MathWritingDataset(Dataset):
         # -- 1. Parse InkML ----------------------------------------------------
         try:
             sample = self._parser.parse(path)
-        except (InkMLParseError, FileNotFoundError):
+        except (InkMLParseError, FileNotFoundError) as exc:
+            logger.warning("Dropping %s: InkML parse/IO error: %s", path, exc)
             return None
 
         # -- 2. Pick the best available label ----------------------------------
         label = self._pick_label(sample)
         if not label:
+            logger.warning("Dropping %s: no usable label", path)
             return None
 
         # -- 3. Feature extraction ---------------------------------------------
         try:
             seq = self._extractor.transform(sample)
-        except FeatureExtractionError:
+        except FeatureExtractionError as exc:
+            logger.warning("Dropping %s: feature extraction error: %s", path, exc)
             return None
 
         features = seq.features   # np.float32, shape (T, 4)
@@ -134,9 +140,12 @@ class MathWritingDataset(Dataset):
             features = features[:self.max_points]
 
         # -- 4. Encode label → integer indices ---------------------------------
+        # encode_label returns [] when the label contains any OOV token
+        # (drop_if_oov defaults to True), so a partially-OOV label is dropped
+        # rather than turned into a corrupted shorter target.
         encoded = encode_label(label, self.tok2idx)
         if not encoded:
-            # All tokens in this label were OOV — skip the sample
+            logger.warning("Dropping %s: label empty or contained OOV token(s)", path)
             return None
 
         return features, encoded
@@ -167,8 +176,15 @@ def _collate_fn(batch: list) -> Optional[dict]:
     Returns None if the entire batch is empty after filtering — the training
     loop should skip None batches.
     """
+    raw_len = len(batch)
     batch = [b for b in batch if b is not None]
+    dropped = raw_len - len(batch)
+    if dropped:
+        logger.warning(
+            "Collate dropped %d/%d bad samples in this batch", dropped, raw_len
+        )
     if not batch:
+        logger.warning("Entire batch was empty after filtering bad samples")
         return None
 
     features_list, labels_list = zip(*batch)

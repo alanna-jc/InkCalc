@@ -195,13 +195,21 @@ def _preprocess(strokes: list[list[tuple]], max_points: int):
 
 def _ctc_greedy_decode(logits: np.ndarray,
                        vocab: dict[int, str],
-                       blank_idx: int) -> str:
+                       blank_idx: int,
+                       seq_len: int | None = None) -> str:
     """
     Greedy CTC decode on a (T, V) or (1, T, V) float array.
     argmax at each timestep → collapse consecutive repeats → strip blank.
+
+    seq_len: true (pre-padding) number of timesteps. Outputs at padded
+             timesteps are never supervised during training, so decoding
+             past seq_len appends spurious tokens. Always pass it.
     """
     if logits.ndim == 3:
         logits = logits[0]
+
+    if seq_len is not None:
+        logits = logits[:seq_len]
 
     indices = logits.argmax(axis=-1).tolist()
 
@@ -230,37 +238,39 @@ def run_recognition(strokes: list[list[tuple]]) -> tuple[str | None, str | None]
     The first call is slower (asset load); subsequent calls are fast.
     """
     try:
+        # Drop empty strokes first, THEN check for content — a bare tap can
+        # produce strokes=[[]] which is truthy but has no points, and would
+        # crash _preprocess on min([]) of an empty coordinate list.
+        strokes = [s for s in strokes if s]
         if not strokes:
             return None, 'Nothing drawn.'
 
         session = _get_session()
         points, lengths = _preprocess(strokes, _meta['max_points'])
+        actual_len = int(lengths[0])
 
-        # ------------------------------------------------------------------
-        # TODO (new CTCTransformer model — implement when deploying it):
-        # The model exported by the rewritten export_onnx.py takes TWO inputs:
+        # The CTCTransformer export takes TWO inputs:
         #     points           float32 (batch, max_points, 4)
         #     key_padding_mask bool    (batch, max_points)  True = padding
-        # It no longer accepts int lengths. Replace the feed below with:
-        #
-        #     actual_len = int(lengths[0])
-        #     mask = (np.arange(_meta['max_points']) >= actual_len)[None, :]  # (1, max_points) bool
-        #     feed = {'points': points, 'key_padding_mask': mask}
-        #
-        # Also note: the new model outputs log-probabilities ('log_probs',
-        # log_softmax already applied inside the graph). Greedy argmax
-        # decoding below is unaffected (argmax of log-probs == argmax of
-        # logits), but anything that treats the output as raw logits isn't.
-        # The old feed logic below only works with the legacy model.onnx.
-        # ------------------------------------------------------------------
+        # and outputs log-probabilities (log_softmax applied in-graph). The
+        # legacy model.onnx instead took an int64 lengths tensor as its second
+        # input, so pick the feed by inspecting the model's declared type.
         input_names = [inp.name for inp in session.get_inputs()]
         output_name = session.get_outputs()[0].name
         feed = {input_names[0]: points}
         if len(input_names) > 1:
-            feed[input_names[1]] = lengths
+            second = session.get_inputs()[1]
+            if 'bool' in second.type:
+                mask = (np.arange(_meta['max_points']) >= actual_len)[None, :]  # (1, max_points) bool
+                feed[second.name] = mask
+            else:  # legacy model.onnx — int64 lengths
+                feed[second.name] = lengths
 
         logits = session.run([output_name], feed)[0]
-        latex  = _ctc_greedy_decode(logits, _vocab, _meta['blank_idx'])
+        # Decode only the real timesteps; padded outputs are unsupervised.
+        latex  = _ctc_greedy_decode(
+            logits, _vocab, _meta['blank_idx'], seq_len=actual_len
+        )
 
         if not latex.strip():
             return None, 'Model returned an empty expression.'
@@ -270,6 +280,10 @@ def run_recognition(strokes: list[list[tuple]]) -> tuple[str | None, str | None]
     except FileNotFoundError as e:
         return None, f'Missing file — copy model.onnx and vocab.json to the project folder. ({e})'
     except Exception as e:
+        # Log the full traceback so shape/type mismatches and other real bugs
+        # are diagnosable instead of collapsing into one opaque string.
+        import traceback
+        traceback.print_exc()
         return None, f'Recognition error: {e}'
 
 

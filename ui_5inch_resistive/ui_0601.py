@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import xml.etree.ElementTree as ET
 import pygame
 
@@ -68,6 +69,27 @@ def strokes_to_inkml(strokes, t0=None):
 # -------------------------------------------------------------
 from recognition import run_recognition
 from solver import run_solve
+
+
+# -------------------------------------------------------------
+# Background recognition worker
+# -------------------------------------------------------------
+# run_recognition() runs an ONNX forward pass that can take a noticeable
+# fraction of a second on the Pi. Running it inline on the pygame event
+# thread freezes the whole UI, so we run it in a daemon thread and let the
+# main loop poll `result` for completion.
+def _recognize_worker(strokes, result):
+    inferred, error = run_recognition(strokes)
+    result['inferred'] = inferred
+    result['error']    = error
+    result['done']     = True
+
+
+def draw_processing_overlay(screen, font, inferred_rect):
+    """Show a 'recognizing…' state in the inferred area while the worker runs."""
+    pygame.draw.rect(screen, CANVAS_BG, inferred_rect)
+    lbl = font.render('recognizing…', True, ACCENT)
+    screen.blit(lbl, lbl.get_rect(center=inferred_rect.center))
 
 
 # -------------------------------------------------------------
@@ -235,6 +257,7 @@ def draw_right_panel(screen, font, font_sm, font_mono,
     screen.set_clip(content_rect)
 
     y = content_rect.y + PAD - scroll_offset
+    y_start = y   # track for total content-height computation (scroll clamp)
 
     if not history:
         empty = font_sm.render('solved results appear here', True, LABEL_COL)
@@ -278,6 +301,11 @@ def draw_right_panel(screen, font, font_sm, font_mono,
 
     draw_button(screen, font, solve_rect,   BTN_SOLVE,  'solve')
     draw_button(screen, font, clear_r_rect, BTN_CLEAR,  'clear')
+
+    # Total pixel height of the rendered history (independent of scroll_offset,
+    # since both y and y_start carry the same -scroll_offset shift). Used by the
+    # main loop to clamp scrolling so it can't run off the end of the content.
+    return max(0, (y - y_start) + PAD)
 
 
 # -------------------------------------------------------------
@@ -347,15 +375,20 @@ def main():
     scroll_drag_y    = None
     processing       = False
     current_inferred = None
+    content_height   = 0       # last rendered history height (for scroll clamp)
+    recog_thread     = None    # background recognition worker
+    recog_result     = {}      # filled by the worker: inferred / error / done
 
     def full_redraw():
+        nonlocal content_height
         screen.fill(BG)
         pygame.draw.rect(screen, DIVIDER_COL,
                          (SPLIT, 0, DIVIDER_W, H))
         draw_left_panel(screen, font, font_sm,
                         draw_state, canvas_rect, ink_surface,
                         clear_rect, submit_rect, SPLIT)
-        draw_right_panel(screen, font, font_sm, font_mono,
+        content_height = draw_right_panel(
+                         screen, font, font_sm, font_mono,
                          history, scroll_offset, current_inferred,
                          solve_rect, clear_r_rect,
                          right_panel_rect, inferred_rect, content_rect)
@@ -408,13 +441,22 @@ def main():
 
                 elif submit_rect.collidepoint(px, py) and not processing:
                     if draw_state.has_content():
+                        # Kick recognition off on a background thread so the UI
+                        # stays responsive. `processing` now genuinely gates
+                        # re-entry because it persists across frames until the
+                        # worker finishes (polled below).
                         processing       = True
-                        inferred, error  = run_recognition(
-                                              draw_state.strokes)
-                        current_inferred = inferred if not error else None
+                        current_inferred = None
+                        strokes_copy     = [list(s) for s in draw_state.strokes]
                         draw_state.clear()
                         ink_surface.fill(CANVAS_BG)
-                        processing       = False
+                        recog_result.clear()
+                        recog_thread = threading.Thread(
+                            target=_recognize_worker,
+                            args=(strokes_copy, recog_result),
+                            daemon=True,
+                        )
+                        recog_thread.start()
                         dirty            = True
 
                 elif solve_rect.collidepoint(px, py) and not processing:
@@ -449,7 +491,8 @@ def main():
 
                 if scroll_drag_y is not None:
                     delta         = scroll_drag_y - py
-                    scroll_offset = max(0, scroll_offset + delta)
+                    max_scroll    = max(0, content_height - content_rect.height)
+                    scroll_offset = min(max(0, scroll_offset + delta), max_scroll)
                     scroll_drag_y = py
                     dirty         = True
 
@@ -462,10 +505,27 @@ def main():
                 scroll_drag_y = None
                 dirty = True
 
+        # Poll the background recognition worker for completion.
+        if processing and recog_result.get('done'):
+            inferred = recog_result.get('inferred')
+            error    = recog_result.get('error')
+            current_inferred = inferred if not error else None
+            # Debug: surface exactly what the model inferred (or why it failed).
+            print(f'[ui] Inferred expression: {current_inferred!r}'
+                  + (f'  (error: {error})' if error else ''))
+            processing = False
+            recog_result.clear()
+            dirty = True
+
         if canvas_dirty:
             canvas_redraw()
         elif dirty:
             full_redraw()
+            if processing:
+                # Overlay drawn once after the redraw; it persists on screen
+                # (no further redraws) until the worker finishes.
+                draw_processing_overlay(screen, font, inferred_rect)
+                pygame.display.flip()
 
         clock.tick(60)
 

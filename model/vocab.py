@@ -85,15 +85,31 @@ def build_vocab(
 def encode_label(
     label: str,
     tok2idx: dict[str, int],
+    *,
+    drop_if_oov: bool = True,
 ) -> list[int]:
     """
     Convert a normalised LaTeX string to a sequence of vocabulary indices.
 
-    Tokens not present in tok2idx are silently skipped.  This can happen
-    if the vocab was built on the train split but a val/test label contains
-    a token not seen in training. The paper notes this is possible.
+    An out-of-vocabulary (OOV) token can appear if the vocab was built on the
+    train split but a val/test label contains a token not seen in training.
+
+    By default (drop_if_oov=True) a label containing ANY OOV token is rejected
+    outright — the function returns [] so the caller drops the whole sample.
+    Silently skipping only the OOV tokens (the old behaviour) produces a
+    shorter, semantically-wrong target (e.g. '\\frac{a}{b}' -> 'ab') that would
+    then be trained against as if it were correct, which is worse than dropping.
+
+    Pass drop_if_oov=False to restore the lossy skip-only-OOV-tokens behaviour.
     """
-    return [tok2idx[t] for t in tokenize_label(label) if t in tok2idx]
+    ids: list[int] = []
+    for t in tokenize_label(label):
+        if t in tok2idx:
+            ids.append(tok2idx[t])
+        elif drop_if_oov:
+            return []          # reject the whole label; caller drops the sample
+        # else: skip only this token (lossy)
+    return ids
 
 
 def save_vocab(

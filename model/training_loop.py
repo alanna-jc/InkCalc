@@ -133,7 +133,11 @@ def load_checkpoint(model, optimizer, scheduler, checkpoint_path="checkpoint.pt"
         print("No checkpoint found.")
         return 0, float("inf")
     
-    checkpoint = torch.load(checkpoint_path)
+    # Map tensors onto the device the model already lives on, so a checkpoint
+    # saved on GPU can be resumed on a CPU-only box (and vice-versa) instead
+    # of failing to deserialize.
+    map_location = next(model.parameters()).device
+    checkpoint = torch.load(checkpoint_path, map_location=map_location)
 
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -209,6 +213,10 @@ def main():
         if step < WARMUP_STEPS:
             return step / max(WARMUP_STEPS, 1)              # 0 -> 1 linearly
         progress = (step - WARMUP_STEPS) / max(total_steps - WARMUP_STEPS, 1)
+        # Clamp to [0, 1] so tiny datasets (total_steps <= WARMUP_STEPS) or any
+        # overrun past total_steps can't push cos() back up past 0 — LR just
+        # settles at 0 instead of oscillating.
+        progress = min(max(progress, 0.0), 1.0)
         return 0.5 * (1.0 + math.cos(math.pi * progress))   # 1 -> 0 cosine
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
