@@ -22,11 +22,17 @@ CHECKPOINT_PATH = "checkpoint.pt"
 # BATCH_SIZE    = 256
 # LEARNING_RATE = 1e-3 
 
-# We only have 20GB GPU, so we need to halve the batch size and learning rate.
+# We only have 20GB GPU in the lab, so we need to halve the batch size and learning rate.
 # Alternatively, could keep original values and run with two GPUS in parallel 
 # but that complicates things quite a bit (see train_ddp.py) 
-BATCH_SIZE    = 128
-LEARNING_RATE = 5e-4 
+# BATCH_SIZE    = 128
+# LEARNING_RATE = 5e-4 
+
+# For home-brew 8GB GPU, we need to go way lower!
+BATCH_SIZE    = 32
+LEARNING_RATE = 2e-4 
+# linear scaling put LR at 1.25e-4 but there is also square root scaling
+# for Adam optimizer which would put this at around 3e-4. Picking in-between value. 
 
 WARMUP_STEPS  = 4000 # batches spent ramping 0 -> peak ("Attention is all you need" used 4000)
 NUM_EPOCHS = 50 # where did we get this number again? 
