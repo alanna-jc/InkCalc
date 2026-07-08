@@ -18,10 +18,18 @@ VAL_DIR       = Path('mathwriting-2024/valid')
 VOCAB_PATH    = Path('vocab.json')
 CHECKPOINT_PATH = "checkpoint.pt"
 
-BATCH_SIZE    = 256
-LEARNING_RATE = 1e-3 # MathWriting used 1e-3 i think?
+# MathWriting used these numbers
+# BATCH_SIZE    = 256
+# LEARNING_RATE = 1e-3 
+
+# We only have 20GB GPU, so we need to halve the batch size and learning rate.
+# Alternatively, could keep original values and run with two GPUS in parallel 
+# but that complicates things quite a bit (see train_ddp.py) 
+BATCH_SIZE    = 128
+LEARNING_RATE = 5e-4 
+
 WARMUP_STEPS  = 4000 # batches spent ramping 0 -> peak ("Attention is all you need" used 4000)
-NUM_EPOCHS = 50 # dummy number
+NUM_EPOCHS = 50 # where did we get this number again? 
 
 # Model hyperparameters — single source of truth.
 # Used for (1) constructing the model, (2) the checkpoint dict, so that
