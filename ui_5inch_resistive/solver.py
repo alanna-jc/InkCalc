@@ -17,6 +17,7 @@ Dependencies:
 """
 
 import re
+import math
 import sympy
 from sympy.parsing.latex import parse_latex
 
@@ -41,9 +42,9 @@ def _has_equals(latex_str: str) -> bool:
 def _clean(s: str) -> str:
     """Fix unicode chars that even DejaVu Sans Mono may lack."""
     return (s
-        .replace('\u2148', 'i')    # ⅈ imaginary unit → i
-        .replace('\u212f', 'e')    # ℯ Euler's number → e
-        .replace('\u22c5', '*')    # ⋅ dot product → *
+        .replace('ⅈ', 'i')    # ⅈ imaginary unit → i
+        .replace('ℯ', 'e')    # ℯ Euler's number → e
+        .replace('⋅', '*')    # ⋅ dot product → *
     )
 
 
@@ -89,6 +90,122 @@ def _format_solution(sol) -> str:
 
     # Bare value (e.g. from a one-symbol solve returning a list of values)
     return _fmt(sol)
+
+
+# ---------------------------------------------------------------------------
+# ── Matrix recovery helpers
+# ---------------------------------------------------------------------------
+# Older models were poor at inferring matrices, so these repair predictable
+# model-output artifacts before handing the LaTeX to SymPy.
+
+def _sanitize_matrix_latex(s: str) -> str:
+    """
+    Strip predictable model output artifacts before parse_latex.
+    """
+    # Fix \bgin typo
+    # -- use lookahead to avoid corrupting valid \begin
+    s = s.replace(r'\bgin', r'\begin')
+    s = re.sub(r'\\begi(?!n)', r'\\begin', s)
+
+    # Normalize plain matrix → pmatrix for parse_latex compatibility
+    s = re.sub(r'\\begin\{matrix\}', r'\\begin{pmatrix}', s)
+    s = re.sub(r'\\end\{matrix\}', r'\\end{pmatrix}', s)
+
+    # Strip leading [ (boundary token bleed from bmatrix training data)
+    s = re.sub(r'^\[+', '', s.strip()).strip()
+
+    # Strip trailing ]\ or ] artifacts (rstrip('\\') in run_solve already
+    # handles bare trailing backslashes, so just strip the remaining ])
+    s = re.sub(r'[\]\\]+$', '', s).strip()
+
+    # Normalize 2+ backslashes before \end{ to single \end
+    s = re.sub(r'\\{2,}end\{', r'\\end{', s)
+
+    # Fix missing or corrupted \end{Xmatrix}
+    begin_m = re.search(r'\\begin\{(\w*matrix)\}', s)
+    if begin_m:
+        env     = begin_m.group(1)
+        end_tag = f'\\end{{{env}}}'
+        if end_tag not in s:
+            # Trim everything after the last clean matrix token
+            # Valid interior chars: digits, letters, spaces, &, backslash
+            s = re.sub(r'[^0-9a-zA-Z\s&\\]+$', '', s).strip()
+            s = re.sub(r'[&\s]+$', '', s).strip()  # trim any dangling separator
+            s = s + ' ' + end_tag
+
+    # Collapse empty cells (&& → &0&) so parse_latex sees a valid entry
+    s = re.sub(r'&&', '&0&', s)
+
+    return s
+
+
+def _recover_matrix(env_name: str, content: str) -> "sympy.Matrix | None":
+    """
+    Try to reconstruct a valid Matrix from garbled interior content
+    where & and \\\\ separators are missing.
+    Returns a sympy.Matrix on success, None on failure.
+    """
+    # If structural tokens are present, the problem is something else
+    if '&' in content or '\\\\' in content:
+        return None
+
+    # Extract scalar tokens: integers, decimals, simple variable names
+    tokens = re.findall(r'[+-]?\d+(?:\.\d+)?|[a-zA-Z]', content)
+    if not tokens:
+        return None
+
+    n = len(tokens)
+    sqrt_n = int(math.isqrt(n))
+
+    if sqrt_n * sqrt_n == n and sqrt_n > 1:
+        # Square matrix (2×2, 3×3, etc.)
+        rows = [tokens[i * sqrt_n:(i + 1) * sqrt_n] for i in range(sqrt_n)]
+    else:
+        # Fall back to a column vector
+        rows = [[t] for t in tokens]
+
+    row_strs  = [' & '.join(row) for row in rows]
+    recovered = (f'\\begin{{{env_name}}} '
+                 + ' \\\\ '.join(row_strs)
+                 + f' \\end{{{env_name}}}')
+
+    try:
+        return parse_latex(recovered)
+    except Exception:
+        return None
+
+
+def _parse_matrix_direct(latex_str: str) -> sympy.Matrix:
+    """
+    Parse a matrix environment directly without parse_latex,
+    which does not support \\begin{pmatrix} environments.
+    Splits by \\\\ for rows and & for columns, then parses
+    each scalar cell individually.
+    """
+    m = re.search(r'\\begin\{\w*matrix\}(.*?)\\end\{\w*matrix\}',
+                  latex_str, re.DOTALL)
+    if not m:
+        raise ValueError('No matrix environment found')
+
+    interior = m.group(1).strip()
+    rows     = re.split(r'\\\\', interior)
+
+    result = []
+    for row in rows:
+        row = row.strip()
+        if not row:
+            continue
+        cells = row.split('&')
+        result.append([
+            parse_latex(re.sub(r'^0+(\d)', r'\1', c.strip()))
+            if c.strip() else sympy.Integer(0)
+            for c in cells
+        ])
+
+    if not result:
+        raise ValueError('Matrix has no rows')
+
+    return sympy.Matrix(result)
 
 
 # ---------------------------------------------------------------------------
@@ -139,14 +256,25 @@ def _solve_matrix(latex_str: str) -> tuple[str | None, str | None]:
             latex_str, re.DOTALL)
 
         if len(full_blocks) < 2:
+            # Use the direct parser; parse_latex can't handle matrix envs.
             try:
-                mat = parse_latex(latex_str)
-                return _clean(sympy.pretty(mat, use_unicode=True)), None
+                mat = _parse_matrix_direct(latex_str)
             except Exception as e:
-                return None, f'Could not parse matrix: {e}'
+                print(f'[DEBUG] _parse_matrix_direct failed: {e}')
+                mat = _recover_matrix(
+                    (_MATRIX_RE.search(latex_str) or type('', (), {'group': lambda s, n: 'pmatrix'})()).group(1),
+                    re.search(r'\\begin\{\w*matrix\}(.*?)\\end\{\w*matrix\}',
+                              latex_str, re.DOTALL).group(1).strip()
+                    if re.search(r'\\begin\{\w*matrix\}(.*?)\\end\{\w*matrix\}', latex_str, re.DOTALL)
+                    else ''
+                )
+                if mat is None:
+                    return None, 'Could not parse matrix (check terminal)'
+
+            return _clean(sympy.pretty(mat, use_unicode=True)), None
 
         try:
-            mats = [parse_latex(b) for b in full_blocks]
+            mats = [_parse_matrix_direct(b) for b in full_blocks]
         except Exception as e:
             return None, f'Could not parse matrices: {e}'
 
@@ -219,8 +347,16 @@ def run_solve(inferred_latex: str) -> tuple[str | None, str | None]:
 
     latex_str = inferred_latex.strip()
     latex_str = latex_str.rstrip('\\').strip()
+
+    # Catch \begin corruption variants before anything else touches the string.
+    if r'\begin' in latex_str or r'\bgi' in latex_str:
+        latex_str = _sanitize_matrix_latex(latex_str)
+
     latex_str = re.sub(r'(?<![\\a-zA-Z])([A-Z])(?![a-zA-Z])',
                        lambda m: m.group(1).lower(), latex_str)
+
+    print(f'[DEBUG] post-sanitize: {repr(latex_str)}')
+    print(f'[DEBUG] is_matrix: {_is_matrix_expr(latex_str)}')
 
     try:
         if _is_matrix_expr(latex_str):
@@ -228,6 +364,7 @@ def run_solve(inferred_latex: str) -> tuple[str | None, str | None]:
         else:
             return _solve_scalar(latex_str)
     except Exception as e:
+        import traceback; traceback.print_exc()
         return None, f'Solver error: {e}'
 
 
@@ -243,6 +380,10 @@ if __name__ == '__main__':
         (r'x^2 + 5x + 6 = 0', None),
         (r'2x + 4 = 0',       None),
         (r'x^3 = -1',         None),
+        # -- matrix cases (merged matrix handling) --
+        (r'\begin{pmatrix}2 & 0\\0 & 2\end{pmatrix}', None),          # single matrix display
+        (r'\begin{pmatrix}1 & 2\\3 & 4\end{pmatrix}'
+         r'\begin{pmatrix}1 & 0\\0 & 1\end{pmatrix}', None),          # matrix multiplication
     ]
 
     print('Running solver smoke tests…\n')

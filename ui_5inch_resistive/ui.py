@@ -7,7 +7,7 @@ import pygame
 # -- display setup ---------------------------------------------
 os.environ['SDL_VIDEODRIVER'] = 'x11'
 os.environ['DISPLAY']         = ':0'
-os.environ["SDL_AUDIODRIVER"] = "dummy"
+os.environ["SDL_AUDIODRIVER"] = "dummy" # weird warnings happen without this line even though we obviously dont have audio
 
 # -- colours ---------------------------------------------------
 BG          = ( 18,  18,  18)
@@ -42,7 +42,10 @@ INTERP_DIST = 2
 
 
 # -------------------------------------------------------------
-# InkML export
+# InkML export - for debugging purposes only
+# this function is never actually used by main pipeline
+# we use the draw stroke data directly
+# this can also be used to generate data if needed
 # -------------------------------------------------------------
 def strokes_to_inkml(strokes, t0=None):
     ink = ET.Element('ink', xmlns='http://www.w3.org/2003/InkML')
@@ -359,8 +362,8 @@ def main():
     _MONO = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf'
     try:
         font      = pygame.font.Font(_SANS, 22)
-        font_sm   = pygame.font.Font(_SANS, 16)
-        font_mono = pygame.font.Font(_MONO, 14)
+        font_sm   = pygame.font.Font(_SANS, 18)
+        font_mono = pygame.font.Font(_MONO, 16)
     except FileNotFoundError:
         font      = pygame.font.Font(None, 28)
         font_sm   = pygame.font.Font(None, 22)
