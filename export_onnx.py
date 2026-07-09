@@ -3,7 +3,7 @@ export_onnx.py  —  Run this ONCE on the training machine (not the Pi).
 =======================================================================
 Produces two files to copy to the Pi:
   model.onnx          — self-contained model, no PyTorch needed at runtime
-  vocab.json          — index→token mapping for CTC decoding + meta
+  vocab.json          — index->token mapping for CTC decoding + meta
 
 Usage (from the repo root):
   python export_onnx.py \
@@ -121,8 +121,11 @@ def main():
         },
         opset_version=args.opset,
         do_constant_folding=True,
+        dynamo=False,   # use the legacy TorchScript exporter: no onnxscript dep,
+                        # honors opset_version, and yields a graph the Pi's
+                        # (often older) onnxruntime handles reliably.
     )
-    print(f'Exported → {onnx_path}')
+    print(f'Exported -> {onnx_path}')
 
     # ── 4. Copy vocab.json through, refreshing meta from the checkpoint ──────
     # vocab.json was written by vocab.save_vocab() as {'vocab': {...}, 'meta': {...}}.
@@ -149,7 +152,7 @@ def main():
     vocab_path = out / 'vocab.json'
     with open(vocab_path, 'w', encoding='utf-8') as f:
         json.dump(bundle, f, ensure_ascii=False, indent=2)
-    print(f'Exported → {vocab_path}')
+    print(f'Exported -> {vocab_path}')
 
     # ── 5. Quick sanity check ─────────────────────────────────────────────────
     print('\nRunning forward pass sanity check…')
