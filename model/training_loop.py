@@ -48,43 +48,71 @@ FFN_NUM_HIDDEN = 2048   # "Attention is all you need"
 DROPOUT        = 0.15   # MathWriting section 4.2
 
 
-def train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device):
-    """
-    batch should contain: AC TODO 
-        inputs:          
-        targets:         
-        input_lengths:   
-        target_lengths:  
-    """
+# def train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device):
+#     """
+#     batch should contain: AC TODO 
+#         inputs:          
+#         targets:         
+#         input_lengths:   
+#         target_lengths:  
+#     """
+#     optimizer.zero_grad()
+
+#     inputs = batch["inputs"].to(device)
+#     targets = batch["targets"].to(device)
+#     input_lengths = batch["input_lengths"].to(device) # the true ones after padding !
+#     target_lengths = batch["target_lengths"].to(device) # the true ones after padding !
+#     key_padding_mask = batch["key_padding_mask"].to(device)
+    
+#     # need to pass in key_padding_mask 
+#     logits = model(inputs, key_padding_mask=key_padding_mask) # (B, T, C)
+
+#     # Convert logits to probabilities
+#     log_probs = F.log_softmax(logits, dim=-1) # (B, T, C)
+
+#     # CTC loss expects (T, B, C) (PyTorch)
+#     log_probs = log_probs.transpose(0, 1) 
+#     loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
+
+#     # Backprop
+#     loss.backward()
+
+#     # Gradient clipping: if the combined size (norm) of all gradients exceeds
+#     # 1.0, scale them down to 1.0. Direction is kept, magnitude is capped —
+#     # prevents one bad batch from catapulting the weights. Must run after
+#     # backward() (gradients exist) and before step() (they get applied).
+#     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+#     optimizer.step()
+#     scheduler.step()          # advance the LR schedule one batch
+#     return loss.item()
+
+# NEw version with AMP. THis helps use less memory to speedup the run 
+def train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device, scaler):
     optimizer.zero_grad()
 
-    inputs = batch["inputs"].to(device)
-    targets = batch["targets"].to(device)
-    input_lengths = batch["input_lengths"].to(device) # the true ones after padding !
-    target_lengths = batch["target_lengths"].to(device) # the true ones after padding !
+    inputs         = batch["inputs"].to(device)
+    targets        = batch["targets"].to(device)
+    input_lengths  = batch["input_lengths"]
+    target_lengths = batch["target_lengths"]
     key_padding_mask = batch["key_padding_mask"].to(device)
-    
-    # need to pass in key_padding_mask 
-    logits = model(inputs, key_padding_mask=key_padding_mask) # (B, T, C)
 
-    # Convert logits to probabilities
-    log_probs = F.log_softmax(logits, dim=-1) # (B, T, C)
+    with torch.amp.autocast('cuda'):
+        logits = model(inputs, key_padding_mask=key_padding_mask)
+        log_probs = F.log_softmax(logits, dim=-1).transpose(0, 1)
+        loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
 
-    # CTC loss expects (T, B, C) (PyTorch)
-    log_probs = log_probs.transpose(0, 1) 
-    loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
-
-    # Backprop
-    loss.backward()
-
-    # Gradient clipping: if the combined size (norm) of all gradients exceeds
-    # 1.0, scale them down to 1.0. Direction is kept, magnitude is capped —
-    # prevents one bad batch from catapulting the weights. Must run after
-    # backward() (gradients exist) and before step() (they get applied).
+    scaler.scale(loss).backward()
+    scaler.unscale_(optimizer)                                   # unscale before clipping
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-    optimizer.step()
-    scheduler.step()          # advance the LR schedule one batch
+    scale_before = scaler.get_scale()
+    scaler.step(optimizer)
+    scaler.update()
+    # Advance the LR schedule only when the optimizer actually stepped. AMP skips
+    # the step (and lowers the scale) on non-finite grads while calibrating, so
+    # guarding on the scale keeps the schedule aligned and silences the warning.
+    if scaler.get_scale() >= scale_before:
+        scheduler.step()
     return loss.item()
 
 
@@ -102,8 +130,8 @@ def validate_one_epoch(model, val_loader, ctc_loss, device):
                 continue
             inputs = batch["inputs"].to(device)
             targets = batch["targets"].to(device)
-            input_lengths = batch["input_lengths"].to(device) # the true ones after padding !
-            target_lengths = batch["target_lengths"].to(device) # the true ones after padding !
+            input_lengths = batch["input_lengths"] # the true ones after padding !
+            target_lengths = batch["target_lengths"] # the true ones after padding !
             key_padding_mask = batch["key_padding_mask"].to(device)
 
             # this is detailed in the 'train_one_batch()' function
@@ -150,7 +178,7 @@ def load_checkpoint(model, optimizer, scheduler, checkpoint_path="checkpoint.pt"
     # saved on GPU can be resumed on a CPU-only box (and vice-versa) instead
     # of failing to deserialize.
     map_location = next(model.parameters()).device
-    checkpoint = torch.load(checkpoint_path, map_location=map_location)
+    checkpoint = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
 
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -215,6 +243,7 @@ def main():
 
     ctc_loss = nn.CTCLoss(blank=BLANK_IDX, zero_infinity=True)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    scaler = torch.amp.GradScaler('cuda')
 
     # LR schedule: linear warmup for WARMUP_STEPS batches, then cosine decay
     # to ~0 over the rest of training. Warmup matters because at step 0 the
@@ -259,7 +288,7 @@ def main():
             if batch is None:   # whole batch was bad samples
                 continue # skip
 
-            batch_loss = train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device)
+            batch_loss = train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device, scaler)
             total_train_loss += batch_loss
             num_train_batches += 1
 

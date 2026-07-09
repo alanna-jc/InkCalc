@@ -117,20 +117,20 @@ class MathWritingDataset(Dataset):
         try:
             sample = self._parser.parse(path)
         except (InkMLParseError, FileNotFoundError) as exc:
-            logger.warning("Dropping %s: InkML parse/IO error: %s", path, exc)
+            logger.debug("Dropping %s: InkML parse/IO error: %s", path, exc)
             return None
 
         # -- 2. Pick the best available label ----------------------------------
         label = self._pick_label(sample)
         if not label:
-            logger.warning("Dropping %s: no usable label", path)
+            logger.debug("Dropping %s: no usable label", path)
             return None
 
         # -- 3. Feature extraction ---------------------------------------------
         try:
             seq = self._extractor.transform(sample)
         except FeatureExtractionError as exc:
-            logger.warning("Dropping %s: feature extraction error: %s", path, exc)
+            logger.debug("Dropping %s: feature extraction error: %s", path, exc)
             return None
 
         features = seq.features   # np.float32, shape (T, 4)
@@ -145,7 +145,7 @@ class MathWritingDataset(Dataset):
         # rather than turned into a corrupted shorter target.
         encoded = encode_label(label, self.tok2idx)
         if not encoded:
-            logger.warning("Dropping %s: label empty or contained OOV token(s)", path)
+            logger.debug("Dropping %s: label empty or contained OOV token(s)", path)
             return None
 
         return features, encoded
@@ -180,10 +180,11 @@ def _collate_fn(batch: list) -> Optional[dict]:
     batch = [b for b in batch if b is not None]
     dropped = raw_len - len(batch)
     if dropped:
-        logger.warning(
+        logger.debug(
             "Collate dropped %d/%d bad samples in this batch", dropped, raw_len
         )
     if not batch:
+        # Rare and worth surfacing: a whole batch gone means something systemic.
         logger.warning("Entire batch was empty after filtering bad samples")
         return None
 

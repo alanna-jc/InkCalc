@@ -132,6 +132,10 @@ def stage2_overfit():
     # Constant LR: the real warmup schedule (WARMUP_STEPS=4000) would never
     # leave the ramp in a ~300-step overfit and the test would fail spuriously.
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lambda step: 1.0)
+    # train_one_batch now requires a GradScaler (AMP). Enable it only on CUDA;
+    # on CPU it's disabled and the calls become plain fp32 passthroughs. Running
+    # on the GPU here means this smoke test also exercises the real AMP path.
+    scaler = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
 
     print(f"Stage 2 — overfitting {len(paths)} samples on {device}, "
           f"expect CER -> ~0 …")
@@ -142,7 +146,7 @@ def stage2_overfit():
         for batch in train_loader:
             if batch is None:
                 continue
-            train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device)
+            train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device, scaler)
 
         _, val_cer = validate_one_epoch(model, val_loader, ctc_loss, device)
         best_cer = min(best_cer, val_cer)
