@@ -18,7 +18,7 @@ from model.preprocessing.feature_extraction import (
 SAMPLE_SIZE = 5000   # files to check; None = all (slower but exact)
 
 def main():
-    data_dir = Path(sys.argv[1] if len(sys.argv) > 1 else 'data/mathwriting-2024/train')
+    data_dir = Path(sys.argv[1] if len(sys.argv) > 1 else 'model/mathwriting-2024/train')
     paths = sorted(data_dir.glob('*.inkml'))
     if not paths:
         sys.exit(f'No .inkml files found in {data_dir}')
