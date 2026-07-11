@@ -2,7 +2,7 @@
 analyze_lengths.py — How long are our sequences, really?
 Answers: is MAX_POINTS = 512 enough, or are we truncating strokes?
 
-Run from model/:   python analyze_lengths.py ../data/mathwriting-2024/train
+Run from model/:   python analyze_lengths.py ../mathwriting-2024/train
 """
 import sys
 import random
