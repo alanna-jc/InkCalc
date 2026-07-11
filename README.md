@@ -43,7 +43,7 @@ InkCalc/
 └── ui_5inch_resistive/             # on-device app (Raspberry Pi 4)
     ├── recognition.py              # ONNX inference + matching preprocessing
     ├── solver.py                   # SymPy LaTeX solver
-    └── ui.py                  # pygame touchscreen UI
+    └── ui.py                       # pygame touchscreen UI
 ```
 
 ## Trained model
