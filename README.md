@@ -6,7 +6,7 @@ entirely on-device, no network required.
 
 ## How it works
 
-A three-stage pipeline, designed to run on a Raspberry Pi with a resistive touchscreen:
+A three-stage pipeline, designed to run on a Raspberry Pi 4 (with 4GB RAM) with a resistive touchscreen:
 
 1. **Recognition** — a CTC-based Transformer encoder converts the online-handwriting
    pen strokes (`[dx, dy, dt, pen_state]` point sequences) into a LaTeX string.
@@ -43,13 +43,13 @@ InkCalc/
 └── ui_5inch_resistive/             # on-device app (Raspberry Pi 4)
     ├── recognition.py              # ONNX inference + matching preprocessing
     ├── solver.py                   # SymPy LaTeX solver
-    └── ui.py                  # pygame touchscreen UI
+    └── ui.py                       # pygame touchscreen UI
 ```
 
 ## Trained model
 
 The model is trained and exported on a workstation, then only the `.onnx` model
-and `vocab.json` are copied to the device (in export folder of below).
+and `vocab.json` are copied to the Pi (in export folder of below).
 
 The trained model is too large to commit. Download it here (vocab included):
 https://drive.google.com/drive/folders/1VBTDO9-XxMkovqbcf12qfQrAg3RtgbuM?usp=sharing

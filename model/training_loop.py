@@ -24,22 +24,23 @@ CHECKPOINT_PATH = "checkpoint.pt"
 
 # We only have 20GB GPU in the lab, so we need to halve the batch size and learning rate.
 # Alternatively, could keep original values and run with two GPUS in parallel 
-# but that complicates things quite a bit (see train_ddp.py) 
+# but that complicates things quite a bit
 # BATCH_SIZE    = 128
 # LEARNING_RATE = 5e-4 
 
 # For home-brew 8GB GPU, we need to go way lower!
 BATCH_SIZE    = 32
 LEARNING_RATE = 2e-4 
-# linear scaling put LR at 1.25e-4 but there is also square root scaling
+# linear scaling puts LR at 1.25e-4 but there is also square root scaling
 # for Adam optimizer which would put this at around 3e-4. Picking in-between value. 
+# info: geeksforgeeks.org/deep-learning/how-should-the-learning-rate-change-as-the-batch-size-changes/
 
 WARMUP_STEPS  = 4000 # batches spent ramping 0 -> peak ("Attention is all you need" used 4000)
-NUM_EPOCHS = 50 # where did we get this number again? 
+NUM_EPOCHS = 50 
 
 # Model hyperparameters — single source of truth.
 # Used for (1) constructing the model, (2) the checkpoint dict, so that
-# export_onnx.py can rebuild the exact same architecture without guessing
+# export_onnx.py can rebuild the exact same architecture
 INPUT_DIM      = 4      # [dx, dy, dt, pen_state]
 EMBED_DIM      = 512    # MathWriting section 4.2
 NUM_LAYERS     = 11     # MathWriting section 4.2
@@ -47,21 +48,15 @@ NUM_HEADS      = 8
 FFN_NUM_HIDDEN = 2048   # "Attention is all you need"
 DROPOUT        = 0.15   # MathWriting section 4.2
 
-
+# Original train_one_batch version left here for reference
 # def train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device):
-#     """
-#     batch should contain: AC TODO 
-#         inputs:          
-#         targets:         
-#         input_lengths:   
-#         target_lengths:  
-#     """
+
 #     optimizer.zero_grad()
 
 #     inputs = batch["inputs"].to(device)
 #     targets = batch["targets"].to(device)
-#     input_lengths = batch["input_lengths"].to(device) # the true ones after padding !
-#     target_lengths = batch["target_lengths"].to(device) # the true ones after padding !
+#     input_lengths = batch["input_lengths"].to(device) 
+#     target_lengths = batch["target_lengths"].to(device) 
 #     key_padding_mask = batch["key_padding_mask"].to(device)
     
 #     # need to pass in key_padding_mask 
@@ -87,7 +82,8 @@ DROPOUT        = 0.15   # MathWriting section 4.2
 #     scheduler.step()          # advance the LR schedule one batch
 #     return loss.item()
 
-# NEw version with AMP. THis helps use less memory to speedup the run 
+# NEW version with AMP. This helps use less memory to speedup the run. Important since
+# running on single 8GB GPU. 
 def train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device, scaler):
     optimizer.zero_grad()
 
@@ -103,14 +99,14 @@ def train_one_batch(model, batch, optimizer, scheduler, ctc_loss, device, scaler
         loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
 
     scaler.scale(loss).backward()
-    scaler.unscale_(optimizer)                                   # unscale before clipping
+    scaler.unscale_(optimizer)  # unscale before clipping
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     scale_before = scaler.get_scale()
     scaler.step(optimizer)
     scaler.update()
     # Advance the LR schedule only when the optimizer actually stepped. AMP skips
     # the step (and lowers the scale) on non-finite grads while calibrating, so
-    # guarding on the scale keeps the schedule aligned and silences the warning.
+    # guarding on the scale keeps the schedule aligned.
     if scaler.get_scale() >= scale_before:
         scheduler.step()
     return loss.item()
@@ -130,8 +126,8 @@ def validate_one_epoch(model, val_loader, ctc_loss, device):
                 continue
             inputs = batch["inputs"].to(device)
             targets = batch["targets"].to(device)
-            input_lengths = batch["input_lengths"] # the true ones after padding !
-            target_lengths = batch["target_lengths"] # the true ones after padding !
+            input_lengths = batch["input_lengths"] 
+            target_lengths = batch["target_lengths"] 
             key_padding_mask = batch["key_padding_mask"].to(device)
 
             # this is detailed in the 'train_one_batch()' function
@@ -143,7 +139,7 @@ def validate_one_epoch(model, val_loader, ctc_loss, device):
             total_loss += loss.item()
             num_batches += 1
 
-            # ── CER ──
+            # -- CER --
             preds = greedy_ctc_decode(logits, input_lengths, BLANK_IDX)
             targets_cpu = targets.cpu()
             offset = 0
@@ -227,7 +223,6 @@ def main():
     )
     # -------------------------------------------------------------------
 
-    # init of model and optimizer
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = CTCTransformer(
@@ -263,11 +258,8 @@ def main():
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-    #best_val_loss = float("inf")
     best_val_cer = float("inf")
-
     start_epoch = 0
-    # not recommended with optuna as it needs a clean state every time to test hyperparams
     
     if os.path.exists(CHECKPOINT_PATH):
             start_epoch, best_val_cer = load_checkpoint(
