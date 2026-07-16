@@ -1,0 +1,120 @@
+Test error analysis — 3490 mismatches / 7644 evaluated (45.7%)
+
+Token edit-distance histogram (how far off each mismatch is):
+  dist   1:  1482  ############################################################
+  dist   2:   740  #############################
+  dist   3:   486  ###################
+  dist   4:   292  ###########
+  dist   5:   176  #######
+  dist   6:    99  ####
+  dist   7:    60  ##
+  dist   8:    51  ##
+  dist   9:    39  #
+  dist  10:    19  
+  dist  11:    12  
+  dist  12:     9  
+  dist  13:    10  
+  dist  14:     3  
+  dist  15:     2  
+  dist  16:     2  
+  dist  19:     4  
+  dist  20:     1  
+  dist  22:     1  
+  dist  26:     1  
+  dist  27:     1  
+
+Top 30 SUBSTITUTIONS  (ref -> pred):
+    172            'x' -> 'X'
+     86            'X' -> 'x'
+     86            '.' -> '\\cdot'
+     80            'P' -> 'p'
+     71            'K' -> 'k'
+     64       '\\cdot' -> '.'
+     57            'p' -> 'P'
+     55            'S' -> 's'
+     53            '{' -> ' '
+     50      '\\omega' -> 'w'
+     49            's' -> 'S'
+     42            'v' -> 'V'
+     39            'k' -> 'K'
+     37            'm' -> 'n'
+     37            'w' -> '\\omega'
+     36            'Z' -> 'z'
+     34            'c' -> 'C'
+     32      '\\kappa' -> 'k'
+     32            ' ' -> '{'
+     31            '1' -> '\\prime'
+     30         '\\nu' -> 'v'
+     29            'V' -> 'v'
+     27            'v' -> '\\nu'
+     26            'z' -> '2'
+     26            'C' -> 'c'
+     24      '\\gamma' -> 'r'
+     24            '^' -> '_'
+     24            'l' -> '1'
+     24            'o' -> '0'
+     23        '\\rho' -> 'p'
+
+Top 30 DELETIONS  (ref token the model dropped):
+    608   '}'
+    482   '{'
+    269   '_'
+    146   '^'
+    108   ' '
+     61   '1'
+     55   '-'
+     38   '&'
+     37   ','
+     36   '\\frac'
+     34   ')'
+     30   '\\overline'
+     30   '='
+     27   '('
+     27   '.'
+     26   '\\cdot'
+     25   '|'
+     25   '\\\\'
+     24   'n'
+     24   '\\prime'
+     21   'i'
+     21   '2'
+     20   '0'
+     18   '\\dot'
+     17   'x'
+     15   '\\begin{matrix}'
+     12   '\\underline'
+     11   'l'
+     11   'X'
+     11   'z'
+
+Top 30 INSERTIONS  (token the model added):
+    388   '}'
+    360   '{'
+    230   '_'
+     97   ' '
+     70   '^'
+     37   '1'
+     34   '-'
+     23   '\\frac'
+     20   ')'
+     17   '\\cdot'
+     16   '\\overline'
+     14   '\\partial'
+     13   ','
+     12   '0'
+     11   '.'
+     11   'p'
+     10   'i'
+     10   'n'
+     10   '='
+     10   '&'
+     10   '2'
+     10   '\\\\'
+      9   'O'
+      9   'x'
+      9   'r'
+      8   '('
+      8   '\\prime'
+      8   '|'
+      7   'l'
+      7   'k'

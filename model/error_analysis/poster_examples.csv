@@ -1,0 +1,20 @@
+category,sample_id,ref,pred,tok_dist,note
+case,1f129dc5b831e697,s),S),1,‘s’ read as ‘S’
+case,6ca6c6eb650d51b8,P(f,p(f,1,‘P’ read as ‘p’
+case,c0102226e610327b,exp,eXp,1,‘x’ read as ‘X’
+case,e93f7ebd5e315a7a,|C|\le2,|c|\le2,1,‘C’ read as ‘c’
+case,79c75d1181eaa334,"K(Q,4)","k(Q,4)",1,‘K’ read as ‘k’
+lookalike,6a0b60cef6fc3b1a,Y,\mathbb{Y},1,‘Y’ read as ‘\mathbb{Y}’
+lookalike,8851583899990027,v,u,1,‘v’ read as ‘u’
+lookalike,8e3dc9a872e68a42,-,1,1,‘-’ read as ‘1’
+lookalike,91bede94294f3cd0,T,J,1,‘T’ read as ‘J’
+lookalike,f6f27c4478bc3fd8,),7,1,‘)’ read as ‘7’
+structural,b1b64bb7d8857b34,**,*{*,1,added ‘{’
+structural,411a13fa97ae6c86,\alpha+\gamma=\pi/2,\alpha+\gamma=\pi}/2,1,added ‘}’
+structural,19ad95e2c0b33ff7,J_{\hat{n}},J_{\hat{n},1,dropped ‘}’
+structural,8743f0933ad59b0a,C_{\frac{1}{2}},C_{\frac{1}2}},1,dropped ‘{’
+structural,180d86e8a3ead7b9,2^{\aleph_{0}}=|R|,2^{\aleph__{0}}=|R|,1,added ‘_’
+catastrophic,eec4dbb0a3b61fcb,x_{1}^{2}+x_{2}^{2}+x_{3}^{3}\le81,"\begin{matrix}_*,*\le3}{83",27,27 tokens off (reference is 32 tokens)
+catastrophic,16857a377f3a7cd8,"n_{\alpha,R}=n_{\alpha,0}e^{-\frac{e\phi_{\alpha}}{k_{B}T_{\alpha}}}",\frac{n\Phi_{\alpha}}{k_{B}T_{\alpha}}\frac{e^{Q{Q{2}},26,26 tokens off (reference is 41 tokens)
+catastrophic,fac2fc1fc91cadd2,Q=\frac{N}{D}\frac{F_{1}}{F_{1}}\frac{F_{2}}{F_{2}}\frac{F_{...}}{F_{...}},"Q=\frac{N}F_{1}}F_{2}}F_{1={\overline{F_{2},\overline{F_{2}}}\overline{F}_{.}}}",22,22 tokens off (reference is 58 tokens)
+catastrophic,66fa4fea5bb1a77b,[\begin{matrix}1&0&-\overline{c}_{D}^{T}&z_{B}\\ 0&I&D&b\end{matrix}],[\begin{matrix}1&-z\\-z&C_{D}&I\\ 0{&b\end{matrix}],20,20 tokens off (reference is 36 tokens)
