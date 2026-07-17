@@ -236,6 +236,47 @@ def draw_left_panel(screen, font, font_sm,
     draw_button(screen, font, submit_rect, BTN_SUBMIT, 'submit')
 
 
+def wrap_text(text, font, max_width):
+    """
+    Break text into lines that fit within max_width pixels. Wraps on spaces and
+    hard-breaks any single token longer than the line (e.g. a long LaTeX matrix
+    string) so nothing runs past the panel edge.
+    """
+    lines = []
+    for paragraph in str(text).split('\n'):
+        cur = ''
+        for word in paragraph.split(' '):
+            trial = word if not cur else cur + ' ' + word
+            if font.size(trial)[0] <= max_width:
+                cur = trial
+                continue
+            if cur:
+                lines.append(cur)
+                cur = ''
+            if font.size(word)[0] <= max_width:
+                cur = word
+            else:                       # single token too long -> break by char
+                chunk = ''
+                for ch in word:
+                    if font.size(chunk + ch)[0] <= max_width:
+                        chunk += ch
+                    else:
+                        lines.append(chunk)
+                        chunk = ch
+                cur = chunk
+        lines.append(cur)
+    return lines
+
+
+def blit_wrapped(screen, text, font, color, x, y, max_width, line_gap=2):
+    """Render text wrapped to max_width starting at (x, y); returns the new y."""
+    for line in wrap_text(text, font, max_width):
+        surf = font.render(line, True, color)
+        screen.blit(surf, (x, y))
+        y += surf.get_height() + line_gap
+    return y
+
+
 def draw_right_panel(screen, font, font_sm, font_mono,
                      history, scroll_offset, current_inferred,
                      solve_rect, clear_r_rect,
@@ -253,9 +294,14 @@ def draw_right_panel(screen, font, font_sm, font_mono,
     if current_inferred:
         lbl = font_sm.render('INFERRED', True, ACCENT)
         screen.blit(lbl, (x0, inferred_rect.y + 8))
-        expr = font.render(current_inferred, True, WHITE)
-        screen.blit(expr, (x0 + 4,
-                           inferred_rect.y + 8 + lbl.get_height() + 4))
+        # Wrap long expressions instead of running off-screen; clip to the
+        # inferred area so extra lines don't bleed into the results below.
+        prev_clip = screen.get_clip()
+        screen.set_clip(inferred_rect)
+        blit_wrapped(screen, current_inferred, font, WHITE,
+                     x0 + 4, inferred_rect.y + 8 + lbl.get_height() + 4,
+                     inferred_rect.right - PAD - (x0 + 4))
+        screen.set_clip(prev_clip)
     else:
         hint = font_sm.render('inferred expression appears here', True, LABEL_COL)
         screen.blit(hint, hint.get_rect(
@@ -276,17 +322,15 @@ def draw_right_panel(screen, font, font_sm, font_mono,
     else:
         for entry in reversed(history):
             if entry.error:
-                err = font_sm.render(entry.error, True, ERROR_COL)
-                screen.blit(err, (x0, y))
-                y += err.get_height() + 6
+                y = blit_wrapped(screen, entry.error, font_sm, ERROR_COL,
+                                 x0, y, content_rect.right - PAD - x0) + 6
             else:
                 inf_lbl = font_sm.render('INFERRED', True, ACCENT)
                 screen.blit(inf_lbl, (x0, y))
                 y += inf_lbl.get_height() + 4
 
-                inf_txt = font.render(entry.inferred or '', True, WHITE)
-                screen.blit(inf_txt, (x0 + 4, y))
-                y += inf_txt.get_height() + 10
+                y = blit_wrapped(screen, entry.inferred or '', font, WHITE,
+                                 x0 + 4, y, content_rect.right - PAD - (x0 + 4)) + 10
 
                 res_lbl = font_sm.render('RESULT', True, ACCENT)
                 screen.blit(res_lbl, (x0, y))
