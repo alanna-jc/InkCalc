@@ -135,6 +135,11 @@ class DrawState:
         self.cur_stroke = []
         self.is_drawing = False
 
+    def undo(self):
+        # Remove the most recently completed stroke, if any.
+        if self.strokes:
+            self.strokes.pop()
+
     def clear(self):
         self.strokes    = []
         self.cur_stroke = []
@@ -204,7 +209,7 @@ def draw_button(screen, font, rect, colour, text, text_col=WHITE):
 
 def draw_left_panel(screen, font, font_sm,
                     draw_state, canvas_rect, ink_surface,
-                    clear_rect, submit_rect, split):
+                    undo_rect, clear_rect, submit_rect, split):
     H = screen.get_height()
     pygame.draw.rect(screen, PANEL_L, (0, 0, split, H))
 
@@ -226,6 +231,7 @@ def draw_left_panel(screen, font, font_sm,
             pygame.draw.lines(screen, STROKE_COL, False,
                               expanded_screen_pts(draw_state.cur_stroke), STROKE_W)
 
+    draw_button(screen, font, undo_rect,   BTN_CLEAR,  'undo')
     draw_button(screen, font, clear_rect,  BTN_CLEAR,  'clear')
     draw_button(screen, font, submit_rect, BTN_SUBMIT, 'submit')
 
@@ -323,21 +329,24 @@ def main():
 
     SPLIT = int(W * 0.62)
 
-    left_btn_w  = (SPLIT - BTN_MARGIN * 3) // 2
+    left_btn_w  = (SPLIT - BTN_MARGIN * 4) // 3   # three buttons: undo | clear | submit
+    btn_y       = H - BTN_H - BTN_MARGIN
     canvas_rect = pygame.Rect(
         BTN_MARGIN, BTN_MARGIN,
         SPLIT - BTN_MARGIN * 2,
         H - BTN_H - BTN_MARGIN * 3
     )
-    clear_rect  = pygame.Rect(
+    undo_rect   = pygame.Rect(
         BTN_MARGIN,
-        H - BTN_H - BTN_MARGIN,
-        left_btn_w, BTN_H
+        btn_y, left_btn_w, BTN_H
+    )
+    clear_rect  = pygame.Rect(
+        BTN_MARGIN * 2 + left_btn_w,
+        btn_y, left_btn_w, BTN_H
     )
     submit_rect = pygame.Rect(
-        BTN_MARGIN * 2 + left_btn_w,
-        H - BTN_H - BTN_MARGIN,
-        left_btn_w, BTN_H
+        BTN_MARGIN * 3 + left_btn_w * 2,
+        btn_y, left_btn_w, BTN_H
     )
 
     right_x          = SPLIT + DIVIDER_W
@@ -382,6 +391,13 @@ def main():
     recog_thread     = None    # background recognition worker
     recog_result     = {}      # filled by the worker: inferred / error / done
 
+    def rebuild_ink_surface():
+        # Undo can't erase a single stroke from the cumulative bitmap, so redraw
+        # the surface from the strokes that remain.
+        ink_surface.fill(CANVAS_BG)
+        for stroke in draw_state.strokes:
+            draw_stroke_on_surface(ink_surface, stroke, canvas_rect.x, canvas_rect.y)
+
     def full_redraw():
         nonlocal content_height
         screen.fill(BG)
@@ -389,7 +405,7 @@ def main():
                          (SPLIT, 0, DIVIDER_W, H))
         draw_left_panel(screen, font, font_sm,
                         draw_state, canvas_rect, ink_surface,
-                        clear_rect, submit_rect, SPLIT)
+                        undo_rect, clear_rect, submit_rect, SPLIT)
         content_height = draw_right_panel(
                          screen, font, font_sm, font_mono,
                          history, scroll_offset, current_inferred,
@@ -436,6 +452,11 @@ def main():
                 if canvas_rect.collidepoint(px, py):
                     draw_state.begin(px, py)
                     canvas_dirty = True
+
+                elif undo_rect.collidepoint(px, py) and not processing:
+                    draw_state.undo()
+                    rebuild_ink_surface()
+                    dirty = True
 
                 elif clear_rect.collidepoint(px, py):
                     draw_state.clear()
