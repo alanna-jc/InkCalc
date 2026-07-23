@@ -44,6 +44,15 @@ def _has_equals(latex_str: str) -> bool:
     return '=' in cleaned
 
 
+_BIGOP_RE = re.compile(r'\\(?:sum|prod|int)(?![a-zA-Z])')
+
+
+def _is_bigop_expr(latex_str: str) -> bool:
+    # \sum, \prod, \int carry '=' in their bounds (e.g. \sum_{i=1}^{n}), so they
+    # must be detected and routed BEFORE the equation solver splits on that '='.
+    return bool(_BIGOP_RE.search(latex_str))
+
+
 def _repair_grouping(s: str) -> str:
     """
     Best-effort repair of the structural/grouping mistakes the recognizer makes
@@ -421,6 +430,32 @@ def _solve_scalar(latex_str: str) -> tuple[str | None, str | None]:
 
 
 # ---------------------------------------------------------------------------
+# ── Big-operator branch  (\sum, \prod, \int)
+# ---------------------------------------------------------------------------
+
+def _solve_bigop(latex_str: str) -> tuple[str | None, str | None]:
+    """
+    Evaluate a summation / product / integral. These need two things the scalar
+    branch doesn't provide: (1) they must NOT be split on the '=' inside their
+    bounds (e.g. \\sum_{i=1}^{n}), and (2) .doit() to actually compute the
+    operator rather than leave it as unevaluated Sigma/Pi/integral notation.
+    """
+    try:
+        expr = _safe_parse_latex(latex_str)
+    except Exception as e:
+        return None, f'Could not parse: {e}'
+
+    try:
+        result = sympy.simplify(expr.doit())
+    except Exception as e:
+        return None, f'Could not evaluate: {e}'
+
+    if not result.free_symbols and result.is_integer:
+        return str(int(result)), None
+    return _clean(sympy.pretty(result, use_unicode=True)), None
+
+
+# ---------------------------------------------------------------------------
 # ── Public API
 # ---------------------------------------------------------------------------
 
@@ -446,11 +481,14 @@ def run_solve(inferred_latex: str) -> tuple[str | None, str | None]:
 
     if DEBUG:
         print(f'[DEBUG] post-sanitize: {repr(latex_str)}')
-        print(f'[DEBUG] is_matrix: {_is_matrix_expr(latex_str)}')
+        print(f'[DEBUG] is_matrix: {_is_matrix_expr(latex_str)}  '
+              f'is_bigop: {_is_bigop_expr(latex_str)}')
 
     try:
         if _is_matrix_expr(latex_str):
             return _solve_matrix(latex_str)
+        elif _is_bigop_expr(latex_str):
+            return _solve_bigop(latex_str)
         else:
             return _solve_scalar(latex_str)
     except Exception as e:
@@ -485,6 +523,11 @@ if __name__ == '__main__':
         (r'\begin{pmatrix}1&0\\0&1\end{pmatrix}=\begin{pmatrix}1&0\\0&1\end{pmatrix}', None),  # equality (True)
         # -- ragged matrix (a dropped &) should still form a matrix via padding --
         (r'\begin{pmatrix}1&2&3\\4&5\end{pmatrix}', None),
+        # -- big operators: sum / product / integral (note '=' in the bounds) --
+        (r'\sum_{i=1}^{5} i',     '15'),   # arithmetic series
+        (r'\prod_{i=1}^{4} i',    '24'),   # 4!
+        (r'\int_{0}^{2} x^2 dx',  None),   # -> 8/3
+        (r'\sum_{i=1}^{n} i',     None),   # -> n(n+1)/2 (symbolic)
     ]
 
     print('Running solver smoke tests…\n')
