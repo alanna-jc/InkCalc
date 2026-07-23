@@ -45,7 +45,7 @@ INTERP_DIST = 2
 # InkML export - for debugging purposes only
 # this function is never actually used by main pipeline
 # we use the draw stroke data directly
-# this can also be used to generate data if needed
+# this can be used to generate data if needed
 # -------------------------------------------------------------
 def strokes_to_inkml(strokes, t0=None):
     ink = ET.Element('ink', xmlns='http://www.w3.org/2003/InkML')
@@ -442,6 +442,22 @@ def main():
         for stroke in draw_state.strokes:
             draw_stroke_on_surface(ink_surface, stroke, canvas_rect.x, canvas_rect.y)
 
+    def draw_last_segment():
+        # Draw ONLY the newest segment onto the ink surface, so per-frame cost is
+        # constant instead of re-drawing the whole (growing) stroke every frame —
+        # that O(N) redraw is what made long strokes stutter and skip on the Pi.
+        s = draw_state.cur_stroke
+        if not s:
+            return
+        nx = int(s[-1][0] - canvas_rect.x)
+        ny = int(s[-1][1] - canvas_rect.y)
+        if len(s) >= 2:
+            px = int(s[-2][0] - canvas_rect.x)
+            py = int(s[-2][1] - canvas_rect.y)
+            pygame.draw.line(ink_surface, STROKE_COL, (px, py), (nx, ny), STROKE_W)
+        # round the joint / render a single-tap dot
+        pygame.draw.circle(ink_surface, STROKE_COL, (nx, ny), max(1, STROKE_W // 2))
+
     def full_redraw():
         nonlocal content_height
         screen.fill(BG)
@@ -458,16 +474,11 @@ def main():
         pygame.display.flip()
 
     def canvas_redraw():
-        pygame.draw.rect(screen, CANVAS_BG, canvas_rect)
+        # The live stroke is drawn incrementally onto ink_surface as points
+        # arrive (see draw_last_segment), so here we just blit it — a fixed cost
+        # per frame regardless of how long the stroke has grown.
         screen.blit(ink_surface, canvas_rect.topleft)
         pygame.draw.rect(screen, DIVIDER_COL, canvas_rect, width=1, border_radius=6)
-        if draw_state.cur_stroke:
-            if len(draw_state.cur_stroke) == 1:
-                x, y, _ = draw_state.cur_stroke[0]
-                pygame.draw.circle(screen, STROKE_COL, (int(x), int(y)), STROKE_W)
-            else:
-                pygame.draw.lines(screen, STROKE_COL, False,
-                                  expanded_screen_pts(draw_state.cur_stroke), STROKE_W)
         pygame.display.update(canvas_rect)
 
     full_redraw()
@@ -495,6 +506,7 @@ def main():
 
                 if canvas_rect.collidepoint(px, py):
                     draw_state.begin(px, py)
+                    draw_last_segment()      # start dot
                     canvas_dirty = True
 
                 elif undo_rect.collidepoint(px, py) and not processing:
@@ -555,6 +567,7 @@ def main():
 
                 if draw_state.is_drawing and canvas_rect.collidepoint(px, py):
                     draw_state.move(px, py)
+                    draw_last_segment()      # bake just the new segment
                     canvas_dirty = True
 
                 if scroll_drag_y is not None:
@@ -565,10 +578,8 @@ def main():
                     dirty         = True
 
             elif event.type in (pygame.MOUSEBUTTONUP, pygame.FINGERUP):
-                if draw_state.is_drawing and draw_state.cur_stroke:
-                    draw_stroke_on_surface(
-                        ink_surface, draw_state.cur_stroke,
-                        canvas_rect.x, canvas_rect.y)
+                # Stroke is already on ink_surface (drawn incrementally), so no
+                # need to re-bake it here.
                 draw_state.end()
                 scroll_drag_y = None
                 dirty = True
