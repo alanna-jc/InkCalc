@@ -47,8 +47,13 @@ def _load_assets():
           f'max_points={_meta["max_points"]}')
 
     opts = ort.SessionOptions()
-    opts.inter_op_num_threads = 2
-    opts.intra_op_num_threads = 2
+    # Use all 4 Pi cores for op-level parallelism (the matmuls that dominate the
+    # transformer). inter_op=1 since this is a single sequential model, so all
+    # threads go to intra-op work. Old settings kept below for easy rollback.
+    # opts.inter_op_num_threads = 2
+    # opts.intra_op_num_threads = 2
+    opts.inter_op_num_threads = 1
+    opts.intra_op_num_threads = 3
 
     _session = ort.InferenceSession(
         MODEL_PATH,
