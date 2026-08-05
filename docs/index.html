@@ -101,6 +101,12 @@ figure{margin:26px 0;background:var(--panel);border:1px solid var(--line);border
   padding:24px;overflow-x:auto}
 figure svg{display:block;max-width:100%;height:auto;margin:0 auto}
 figcaption{color:var(--muted);font-size:13.5px;margin-top:16px;text-align:center;max-width:none}
+/* device photos */
+.shots{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin:26px 0}
+figure.shot{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:14px;overflow:hidden}
+figure.shot img{display:block;width:100%;height:auto;border-radius:8px}
+figure.shot figcaption{margin-top:12px}
 
 /* tables */
 .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
@@ -507,6 +513,16 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
     <span class="tag">Deployment</span>
     <h2>Getting it onto the Pi</h2>
     <p class="sectlede">The training environment never ships. The checkpoint is converted to a self-contained ONNX graph so that inference on-device needs only <span class="mono">onnxruntime</span> and NumPy &mdash; no PyTorch on a machine with 4&nbsp;GB of RAM.</p>
+    <div class="shots">
+      <figure class="shot">
+        <img src="frontOn.jpg" alt="InkCalc running on the 5-inch resistive touchscreen, viewed straight on" loading="lazy">
+        <figcaption>The finished device head-on: the draw pad fills the left of the 5&Prime; touchscreen, with the inferred expression and solved result on the right and the action buttons along the bottom.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="connections.jpg" alt="Raspberry Pi 4 mounted beneath the display with USB, HDMI, Ethernet and power connections visible" loading="lazy">
+        <figcaption>From behind: the Raspberry&nbsp;Pi&nbsp;4 sits directly under the panel, which takes video over HDMI and touch input over USB &mdash; alongside the Pi's power and remaining ports.</figcaption>
+      </figure>
+    </div>
     <figure>
 <svg viewBox="0 0 960 150" role="img" aria-label="Export path from checkpoint to Raspberry Pi">
   <g font-family="system-ui,sans-serif" text-anchor="middle">
