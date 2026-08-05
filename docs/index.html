@@ -355,7 +355,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
     <text x="480" y="222" text-anchor="middle" font-size="12" fill="var(--muted)">identical transform runs during training and on-device inference — no train/serve skew</text>
   </g>
 </svg>
-      <figcaption>Five transformations applied to every sample, following the raw-point branch of Carbune et al. (arXiv:1902.10525).</figcaption>
+      <figcaption>Five transformations applied to every sample, following Carbune et al. (arXiv:1902.10525).</figcaption>
     </figure>
     <div class="grid g2">
       <div class="card"><h4>Why deltas, not coordinates</h4><p>Encoding each point as a <i>displacement</i> from the previous one makes the representation translation-invariant: the same symbol written in a different part of the screen produces the same feature sequence.</p></div>
@@ -569,10 +569,10 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
     </div>
     <h3>References</h3>
     <ul class="clean">
-      <li>Gervais et&nbsp;al., <a href="https://arxiv.org/abs/2404.10690" target="_blank" rel="noopener">MathWriting: A Dataset For Handwritten Mathematical Expression Recognition</a> &mdash; dataset and CTC baseline configuration.</li>
+      <li>P.&nbsp;Gervais, A.&nbsp;Fadeeva, and A.&nbsp;Maksai, <a href="https://arxiv.org/abs/2404.10690" target="_blank" rel="noopener">MathWriting: A Dataset for Handwritten Mathematical Expression Recognition</a> &mdash; dataset and CTC baseline configuration (arXiv:2404.10690, 2024).</li>
       <li>Carbune et&nbsp;al., <a href="https://arxiv.org/abs/1902.10525" target="_blank" rel="noopener">Fast Multi-language LSTM-based Online Handwriting Recognition</a> &mdash; raw-point feature representation.</li>
-      <li>Vaswani et&nbsp;al., <a href="https://arxiv.org/abs/1706.03762" target="_blank" rel="noopener">Attention Is All You Need</a> &mdash; Transformer encoder and warmup schedule.</li>
-      <li>Graves et&nbsp;al., <a href="https://www.cs.toronto.edu/~graves/icml_2006.pdf" target="_blank" rel="noopener">Connectionist Temporal Classification</a> &mdash; alignment-free sequence loss.</li>
+      <li>A.&nbsp;Vaswani et&nbsp;al., <a href="https://arxiv.org/abs/1706.03762" target="_blank" rel="noopener">Attention Is All You Need</a> &mdash; Transformer encoder and warmup schedule (NeurIPS 2017).</li>
+      <li>R.&nbsp;Xiong et&nbsp;al., <a href="https://arxiv.org/abs/2002.04745" target="_blank" rel="noopener">On Layer Normalization in the Transformer Architecture</a> &mdash; layer-norm placement underpinning the encoder's Peri-LN blocks (ICML 2020).</li>
     </ul>
   </div>
 </section>
