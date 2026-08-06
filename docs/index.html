@@ -31,6 +31,12 @@ code,.mono{font-family:ui-monospace,"Cascadia Code",Consolas,"SF Mono",monospace
 section{padding:72px 0;border-top:1px solid var(--line)}
 section:first-of-type{border-top:none}
 
+/* author bar */
+.authorbar{background:var(--bg-alt);border-bottom:1px solid var(--line);text-align:center}
+.authorbar .wrap{padding-top:10px;padding-bottom:10px}
+.authorbar .names{font-weight:600;color:var(--text);font-size:14px}
+.authorbar .affil{color:var(--muted);font-size:12.5px;margin-top:2px}
+
 /* nav */
 nav{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 88%,transparent);
   backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
@@ -158,6 +164,13 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
 </style>
 </head>
 <body>
+
+<div class="authorbar">
+  <div class="wrap">
+    <div class="names">Alanna Cunha&nbsp;&nbsp;|&nbsp;&nbsp;Bowa Wang&nbsp;&nbsp;|&nbsp;&nbsp;Robin Zerr</div>
+    <div class="affil">University of Victoria</div>
+  </div>
+</div>
 
 <nav>
   <div class="wrap">
