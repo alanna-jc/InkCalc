@@ -4,6 +4,8 @@
 expression by hand on a touchscreen and InkCalc recognizes it and solves it
 entirely on-device, no network required.
 
+Link to website: https://alanna-jc.github.io/InkCalc/ 
+
 ## How it works
 
 A three-stage pipeline, designed to run on a Raspberry Pi 4 (with 4GB RAM) with a resistive touchscreen:
